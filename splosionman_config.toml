@@ -1,0 +1,43 @@
+[functions]
+0x82571068 = { name = "sub_82571068" }
+0x8259A9B8 = { name = "sub_8259A9B8" }
+0x822194D4 = { name = "sub_822194D4" }
+0x825F8894 = { name = "sub_825F8894" }
+0x822197CC = { name = "sub_822197CC" }
+0x82350D78 = { name = "sub_82350D78" }
+0x82350334 = { name = "sub_82350334" }
+0x8221A074 = { name = "sub_8221A074" }
+0x8221A090 = { name = "sub_8221A090" }
+0x82219F5C = { name = "sub_82219F5C" }
+0x825F3F7C = { name = "sub_825F3F7C" }
+0x8260502C = { name = "sub_8260502C" }
+0x82604FA4 = { name = "sub_82604FA4"}
+0x82188768 = { name = "sub_82188768"}
+0x82270118 = { name = "sub_82270118"}
+0x82270188 = { name = "sub_82270188"}
+0x82270320 = { name = "sub_82270320"}
+0x82350ED8 = { name = "sub_82350ED8"}
+0x8247F5CC = { name = "sub_8247F5CC"}
+0x825F614C = { name = "sub_825F614C"}
+0x825F64A4 = { name = "sub_825F64A4"}
+0x825F8D10 = { name = "sub_825F8D10"}
+0x825F8DB4 = { name = "sub_825F8DB4"}
+0x825FB5C0 = { name = "sub_825FB5C0"}
+0x825FB9D4 = { name = "sub_825FB9D4"}
+0x825FFB54 = { name = "sub_825FFB54"}
+0x8260098C = { name = "sub_8260098C"}
+0x82600D2C = { name = "sub_82600D2C"}
+0x82601690 = { name = "sub_82601690"}
+0x82601B74 = { name = "sub_82601B74"}
+0x826020D4 = { name = "sub_826020D4"}
+0x82602214 = { name = "sub_82602214"}
+0x82604CC8 = { name = "sub_82604CC8"}
+0x82604FB4 = { name = "sub_82604FB4"}
+0x82605B6C = { name = "sub_82605B6C"}
+0x82607194 = { name = "sub_82607194"}
+0x826071B0 = { name = "sub_826071B0"}
+0x82607220 = { name = "sub_82607220"}
+0x82124170 = { name = "sub_82124170"}
+0x826D7DC0 = { name = "sub_826D7DC0"}
+0x823A22F8 = { name = "sub_823A22F8"}
+0x820F91B8 = { name = "sub_820F91B8"}

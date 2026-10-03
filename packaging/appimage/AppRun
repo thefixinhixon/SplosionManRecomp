@@ -1,0 +1,11 @@
+#!/bin/bash
+set -eu
+
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PATH="$HERE/usr/libexec:$HERE/usr/bin:$PATH"
+export QT_PLUGIN_PATH="$HERE/usr/plugins"
+# Do not force QT_QPA_PLATFORM: Qt auto-selects Wayland on Wayland sessions
+# and xcb on X11. (Forcing xcb under XWayland broke mouse input.)
+
+exec "$HERE/usr/bin/splosionman_launcher" "$@"

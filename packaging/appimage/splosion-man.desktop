@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name='Splosion Man
+Comment=Native Linux launcher for 'Splosion Man
+Exec=splosionman_launcher
+Icon=splosion-man
+Categories=Game;ActionGame;
+Terminal=false
+StartupNotify=true

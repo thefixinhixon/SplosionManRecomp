@@ -1,0 +1,7 @@
+assets/
+out/
+bin/
+*.rar
+*.xex
+*.iso
+packaging/artifacts/
