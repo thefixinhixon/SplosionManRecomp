@@ -69,6 +69,13 @@ game starts freezing at the intro→3D transition, delete
 ## Credits & disclosure
 
 - ReXGlue SDK team — the recompiler and runtime that make this possible.
+- The launcher is adapted from the **Linux Qt launcher written by
+  MaSieS4Fun** for [hells-gate-recomp](https://github.com/florinp93/hells-gate-recomp),
+  Zerkiller's (florinp93's) Dante's Inferno recompilation — its
+  settings system, game-folder setup, and AppImage packaging approach
+  all started there, and the launcher lineage goes back to Zerkiller's
+  original launcher for that project. Credit where it's due: thank
+  you both.
 - Twisted Pixel Games — for a game absolutely worth this much trouble.
 - This port was built by Jason Hixon with heavy AI assistance
   (Muse, by Meta) on the coding side, and tested the old-fashioned
