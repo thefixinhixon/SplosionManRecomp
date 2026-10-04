@@ -19,16 +19,13 @@
 #             define is load-bearing.
 #
 # Open blockers flagged by the recon (fix/confirm before trusting green):
-#   [B1] Codegen must stay a no-op in CI: the committed
-#        generated/default/codegen.d points at the original author's
-#        machine (/home/hatch/workspace/splosion-man/...) and lists
-#        assets/default.xex as an input. The XEX is proprietary and is
-#        NOT in this repo, so on a fresh checkout ninja would re-run
-#        codegen and fail. The "Keep codegen a no-op" step below mirrors
-#        the local build fix (rewrite depfile paths to the workspace,
-#        refresh the stamp, satisfy the XEX dep with an empty
-#        placeholder). UNVERIFIED in CI — if rexglue grows a supported
-#        codegen-skip switch, use it and delete the step.
+#   [B1] Codegen must stay a no-op in CI: the XEX is proprietary
+#        and NOT in this repo. generated/rexglue.cmake now gates
+#        the codegen rule on assets/default.xex existing; CI
+#        checkouts have none, so the rule vanishes and the
+#        committed generated/ tree compiles as-is. (Earlier
+#        stamp tricks lost to ninja freshness races -- the
+#        freshly linked rexglue.exe always re-armed the rule.)
 #   [B2] The SDK version check (rex_resolve_version in the SDK) hard-
 #        fails when the game repo carries a release tag that reads
 #        "ahead" of the SDK floor — hit locally with this repo's v1.3
@@ -105,30 +102,6 @@ jobs:
           --exclude=src/ui/d3d12/d3d12_presenter.cpp
           ../repo/patches/house-sdk.patch
 
-      - name: Keep codegen a no-op (no XEX in CI)
-        shell: pwsh
-        working-directory: repo
-        # See [B1]. Mirrors the local build fix.
-        run: |
-          $repoFwd = "$env:GITHUB_WORKSPACE/repo" -replace '\\', '/'
-          (Get-Content generated/default/codegen.d -Raw) `
-            -replace '/home/hatch/workspace/splosion-man', $repoFwd |
-            Set-Content generated/default/codegen.d -NoNewline
-          if (-not (Test-Path assets)) {
-            # Fresh checkouts have no assets/ at all (gitignored).
-            New-Item -ItemType Directory assets | Out-Null
-          }
-          if (-not (Test-Path assets/default.xex)) {
-            # Placeholder only: satisfies the depfile input so ninja
-            # skips codegen. Never read, never shipped.
-            New-Item -ItemType File assets/default.xex | Out-Null
-          }
-          # Stamps must be newer than every depfile input.
-          foreach ($stamp in @('generated/default/codegen.build.stamp', 'generated/default/codegen.stamp')) {
-            if (-not (Test-Path $stamp)) { New-Item -ItemType File $stamp | Out-Null }
-            (Get-Item $stamp).LastWriteTimeUtc = [DateTime]::UtcNow
-          }
-
       - name: Configure (win-amd64-release preset, FidelityFX ON)
         shell: pwsh
         working-directory: repo
@@ -138,28 +111,6 @@ jobs:
           -DREXGLUE_ENABLE_FIDELITYFX=ON
           -DCMAKE_C_FLAGS=-march=x86-64-v2
           -DCMAKE_CXX_FLAGS=-march=x86-64-v2
-
-      - name: Build codegen tool first
-        shell: pwsh
-        working-directory: repo
-        # The codegen custom command lists rexglue.exe as an input and
-        # the generated sources as outputs, so a freshly linked tool is
-        # always "newer" and ninja re-fires codegen mid-build (run #6:
-        # tool linked at [846/986], codegen fired at [848] and died --
-        # no XEX in CI, and the tool cannot even start there). Build
-        # the tool FIRST, then freeze the outputs below.
-        run: cmake --build --preset win-amd64-release --target rexglue
-
-      - name: Freeze codegen outputs (codegen stays a no-op)
-        shell: pwsh
-        working-directory: repo
-        # With rexglue.exe already built, touching every committed
-        # codegen output to NOW makes the codegen rule up-to-date for
-        # the main build: all its inputs (tool, placeholder XEX,
-        # tomls) are older than its outputs (stamp + generated tree).
-        run: |
-          Get-ChildItem -Recurse generated/default |
-            ForEach-Object { $_.LastWriteTimeUtc = [DateTime]::UtcNow }
 
       - name: Build
         shell: pwsh
