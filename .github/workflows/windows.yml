@@ -1,0 +1,181 @@
+# =============================================================================
+# Windows build — DRAFT (authored 2026-10-03 from a local recon; NOT yet run)
+#
+# Two independent jobs on windows-latest:
+#
+#   game      this repo + ReXGlue SDK at a pinned commit + patches/
+#             house-sdk.patch, built with the repo's win-amd64-release
+#             preset. NOTE: the preset compiles with clang/clang++ and
+#             Ninja — the "Windows preset" here is NOT MSVC cl.exe.
+#             FidelityFX is forced ON (-DREXGLUE_ENABLE_FIDELITYFX=ON);
+#             without it the runtime silently falls back to bilinear
+#             upscaling (bit us on Linux twice: Condemned v12,
+#             'Splosion Man v2.0).
+#
+#   launcher  the TP house launcher in tp-launcher/ (this same repo —
+#             single checkout, no second source), built for 'Splosion
+#             Man with -DTP_GAME=splosionman against MSVC Qt 6.8.
+#             tp-launcher/CMakeLists.txt defaults TP_GAME=maw, so that
+#             define is load-bearing.
+#
+# Open blockers flagged by the recon (fix/confirm before trusting green):
+#   [B1] Codegen must stay a no-op in CI: the committed
+#        generated/default/codegen.d points at the original author's
+#        machine (/home/hatch/workspace/splosion-man/...) and lists
+#        assets/default.xex as an input. The XEX is proprietary and is
+#        NOT in this repo, so on a fresh checkout ninja would re-run
+#        codegen and fail. The "Keep codegen a no-op" step below mirrors
+#        the local build fix (rewrite depfile paths to the workspace,
+#        refresh the stamp, satisfy the XEX dep with an empty
+#        placeholder). UNVERIFIED in CI — if rexglue grows a supported
+#        codegen-skip switch, use it and delete the step.
+#   [B2] The SDK version check (rex_resolve_version in the SDK) hard-
+#        fails when the game repo carries a release tag that reads
+#        "ahead" of the SDK floor — hit locally with this repo's v1.3
+#        tag (local workaround: park .git during configure/build). The
+#        game checkout therefore uses fetch-tags: false. If configure
+#        still trips the check, the fallback is deleting local tags in
+#        a step before configuring.
+#   [B3] Exact Windows file names for the runtime / GPU-plugin DLLs are
+#        unknown until the first build (Linux ships librexruntime.so +
+#        librexgpu-xenos.so). The artifact step globs *.dll beside the
+#        exe; pin exact names after run #1. Relatedly, the launcher's
+#        Windows program-set names (tp-launcher/src/platform.cpp) are
+#        placeholders pending this same first run.
+#   [B4] The launcher executable is a console-subsystem binary on
+#        Windows (add_executable in tp-launcher lacks the WIN32 flag)
+#        — cosmetic, fine for the CI milestone.
+#
+# Sources verified publicly cloneable without credentials (2026-10-03):
+# rexglue/rexglue-sdk, rexglue/FidelityFX-SDK, this repo. FidelityFX
+# needs no manual step: the SDK's CMake FetchContent clones
+# rexglue/FidelityFX-SDK at eee08db1688ac3d1275a70b728f4a8ba22914213.
+# The house patch also carries the WIN32 llvm-rc UTF-16 resource fix
+# the FidelityFX build needs under clang on Windows.
+# =============================================================================
+
+name: Windows build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Exact SDK commit patches/house-sdk.patch was generated from. Do not float.
+  REXSDK_COMMIT: f5337cdc947ff6d4c4196737e2c807a48f2a1fc2
+
+jobs:
+  game:
+    name: Game (splosionman.exe + runtime)
+    runs-on: windows-latest
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+        with:
+          path: repo
+          fetch-tags: false # see [B2]
+
+      - name: Check out ReXGlue SDK (pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: rexglue/rexglue-sdk
+          ref: ${{ env.REXSDK_COMMIT }}
+          path: rexglue-sdk
+
+      - name: Apply house SDK patches
+        shell: pwsh
+        working-directory: rexglue-sdk
+        # Verified locally: applies cleanly to a pristine checkout of
+        # the pinned commit (git apply --check, 57 files).
+        run: git apply --whitespace=nowarn ../repo/patches/house-sdk.patch
+
+      - name: Keep codegen a no-op (no XEX in CI)
+        shell: pwsh
+        working-directory: repo
+        # See [B1]. Mirrors the local build fix.
+        run: |
+          $repoFwd = "$env:GITHUB_WORKSPACE/repo" -replace '\\', '/'
+          (Get-Content generated/default/codegen.d -Raw) `
+            -replace '/home/hatch/workspace/splosion-man', $repoFwd |
+            Set-Content generated/default/codegen.d -NoNewline
+          if (-not (Test-Path assets/default.xex)) {
+            # Placeholder only: satisfies the depfile input so ninja
+            # skips codegen. Never read, never shipped.
+            New-Item -ItemType File assets/default.xex | Out-Null
+          }
+          # Stamps must be newer than every depfile input.
+          (Get-Item generated/default/codegen.build.stamp).LastWriteTimeUtc = [DateTime]::UtcNow
+          (Get-Item generated/default/codegen.stamp).LastWriteTimeUtc = [DateTime]::UtcNow
+
+      - name: Configure (win-amd64-release preset, FidelityFX ON)
+        shell: pwsh
+        working-directory: repo
+        run: >
+          cmake --preset win-amd64-release
+          -DREXSDK_DIR="$env:GITHUB_WORKSPACE/rexglue-sdk"
+          -DREXGLUE_ENABLE_FIDELITYFX=ON
+
+      - name: Build
+        shell: pwsh
+        working-directory: repo
+        run: cmake --build --preset win-amd64-release
+
+      - name: Upload game artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: splosionman-windows-game
+          # See [B3]: the exe name is set by the repo's CMake
+          # (splosionman); runtime/plugin DLL names get pinned after
+          # the first run.
+          path: |
+            repo/out/build/win-amd64-release/splosionman.exe
+            repo/out/build/win-amd64-release/*.dll
+          if-no-files-found: error
+
+  launcher:
+    name: TP launcher ('Splosion Man)
+    runs-on: windows-latest
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6.8 (MSVC 2022 x64)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          arch: win64_msvc2022_64
+          # tp-launcher needs Qt6 Widgets only (CMakeLists verified).
+          # Local dev used Qt 6.4.2 (container) and 6.10.2 (host).
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure launcher (TP_GAME=splosionman)
+        shell: pwsh
+        run: >
+          cmake -S tp-launcher -B tp-launcher/out/build/win -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DTP_GAME=splosionman
+
+      - name: Build launcher
+        shell: pwsh
+        run: cmake --build tp-launcher/out/build/win
+
+      - name: Deploy Qt runtime next to the exe
+        shell: pwsh
+        run: windeployqt tp-launcher/out/build/win/TPSplosionmanLauncher.exe
+
+      - name: Upload launcher artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tp-launcher-splosionman-windows
+          path: |
+            tp-launcher/out/build/win/TPSplosionmanLauncher.exe
+            tp-launcher/out/build/win/*.dll
+            tp-launcher/out/build/win/platforms/**
+            tp-launcher/out/build/win/styles/**
+            tp-launcher/out/build/win/imageformats/**
+            tp-launcher/out/build/win/tls/**
+          if-no-files-found: error
