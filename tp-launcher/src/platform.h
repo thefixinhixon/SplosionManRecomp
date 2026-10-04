@@ -1,4 +1,4 @@
-// platform.h - the launcher\x27s operating-system seam.
+// platform.h - the launcher's operating-system seam.
 //
 // Everything that differs between Linux and Windows lives behind
 // these three functions, so the rest of the launcher (detection,
@@ -21,7 +21,7 @@ namespace platform {
 // Folders that may contain a Games library: detection tests the
 // base itself and each immediate subfolder as a candidate game
 // root. Order matters only as a tie-break - a folder must still
-// hold the profile\x27s own title (see isGameRoot) to count.
+// hold the profile's own title (see isGameRoot) to count.
 //   Linux:   ~/Games, /mnt/*/Games, /media/<user>/*/Games
 //            (mount points enumerated in name order, so the list
 //            never depends on readdir order)
@@ -29,7 +29,7 @@ namespace platform {
 //            drive (game libraries usually live on a data drive)
 QStringList gameRootSearchBases();
 
-// The game\x27s program files as ONE matched set: exe first, then the
+// The game's program files as ONE matched set: exe first, then the
 // runtime libs that must sit next to it. Mixing files across build
 // sets corrupts at runtime, so the set is only ever taken whole
 // from one folder (see resolveExecutableSet in launcher.cpp).
