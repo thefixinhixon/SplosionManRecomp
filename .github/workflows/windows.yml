@@ -103,14 +103,20 @@ jobs:
           (Get-Content generated/default/codegen.d -Raw) `
             -replace '/home/hatch/workspace/splosion-man', $repoFwd |
             Set-Content generated/default/codegen.d -NoNewline
+          if (-not (Test-Path assets)) {
+            # Fresh checkouts have no assets/ at all (gitignored).
+            New-Item -ItemType Directory assets | Out-Null
+          }
           if (-not (Test-Path assets/default.xex)) {
             # Placeholder only: satisfies the depfile input so ninja
             # skips codegen. Never read, never shipped.
             New-Item -ItemType File assets/default.xex | Out-Null
           }
           # Stamps must be newer than every depfile input.
-          (Get-Item generated/default/codegen.build.stamp).LastWriteTimeUtc = [DateTime]::UtcNow
-          (Get-Item generated/default/codegen.stamp).LastWriteTimeUtc = [DateTime]::UtcNow
+          foreach ($stamp in @('generated/default/codegen.build.stamp', 'generated/default/codegen.stamp')) {
+            if (-not (Test-Path $stamp)) { New-Item -ItemType File $stamp | Out-Null }
+            (Get-Item $stamp).LastWriteTimeUtc = [DateTime]::UtcNow
+          }
 
       - name: Configure (win-amd64-release preset, FidelityFX ON)
         shell: pwsh
