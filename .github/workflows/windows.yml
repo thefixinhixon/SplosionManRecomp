@@ -139,10 +139,40 @@ jobs:
           -DCMAKE_C_FLAGS=-march=x86-64-v2
           -DCMAKE_CXX_FLAGS=-march=x86-64-v2
 
+      - name: Build codegen tool first
+        shell: pwsh
+        working-directory: repo
+        # The codegen custom command lists rexglue.exe as an input and
+        # the generated sources as outputs, so a freshly linked tool is
+        # always "newer" and ninja re-fires codegen mid-build (run #6:
+        # tool linked at [846/986], codegen fired at [848] and died --
+        # no XEX in CI, and the tool cannot even start there). Build
+        # the tool FIRST, then freeze the outputs below.
+        run: cmake --build --preset win-amd64-release --target rexglue
+
+      - name: Freeze codegen outputs (codegen stays a no-op)
+        shell: pwsh
+        working-directory: repo
+        # With rexglue.exe already built, touching every committed
+        # codegen output to NOW makes the codegen rule up-to-date for
+        # the main build: all its inputs (tool, placeholder XEX,
+        # tomls) are older than its outputs (stamp + generated tree).
+        run: |
+          Get-ChildItem -Recurse generated/default |
+            ForEach-Object { $_.LastWriteTimeUtc = [DateTime]::UtcNow }
+
       - name: Build
         shell: pwsh
         working-directory: repo
         run: cmake --build --preset win-amd64-release
+
+      - name: List build outputs (diagnostic)
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse repo -Include *.exe, *.dll |
+            Where-Object { $_.FullName -notmatch 'rexglue-sdk' } |
+            Select-Object -ExpandProperty FullName
 
       - name: Upload game artifact
         uses: actions/upload-artifact@v4
