@@ -17,7 +17,7 @@ QStringList gameRootSearchBases()
 #if defined(Q_OS_WIN)
     QStringList bases;
 
-    // The user\x27s own Games folder, then <drive>:\Games for every
+    // The user's own Games folder, then <drive>:\Games for every
     // drive - game libraries usually live on a data drive, not C:.
     bases << QDir::home().filePath(QStringLiteral("Games"));
     for (const QFileInfo &drive : QDir::drives())
@@ -54,16 +54,13 @@ QStringList gameRootSearchBases()
 QStringList programSetFiles(const GameProfile &profile)
 {
 #if defined(Q_OS_WIN)
-    // TODO(Phase 2): CONFIRM THESE NAMES against the first Windows
-    // SDK build before shipping anything. The .exe suffix is
-    // standard, but the ReXGlue runtime\x27s Windows artifacts may
-    // not be called librexruntime.dll / librexgpu-xenos.dll (the
-    // Linux .so names carried over are a guess, nothing more).
-    // When the real build exists, fix this list - and only this
-    // list; every consumer goes through programSetFiles().
+    // Confirmed against the first green Windows CI build
+    // (SplosionManRecomp run #8, 2026-10-03): the SDK stages
+    // rexruntime.dll + rexgpu-xenos.dll -- no lib prefix, unlike
+    // the Linux .so names. Every consumer goes through here.
     return {profile.exeName + QStringLiteral(".exe"),
-            QStringLiteral("librexruntime.dll"),
-            QStringLiteral("librexgpu-xenos.dll")};
+            QStringLiteral("rexruntime.dll"),
+            QStringLiteral("rexgpu-xenos.dll")};
 #else
     return {profile.exeName,
             QStringLiteral("librexruntime.so"),
@@ -88,19 +85,19 @@ bool vacuumGuestMemory()
     // The runtime backs guest RAM with a ~4.8 GB xenia_memory_* file
     // per run in /dev/shm. Crashed/killed runs leak them; once tmpfs
     // fills, the next run dies with SIGBUS right after "Guest memory
-    // arena mapped". Jason\x27s hand-written launch.sh just rm\x27s them
+    // arena mapped". Jason's hand-written launch.sh just rm's them
     // all before launch, which is safe there because no game is
     // running yet. This launcher may be asked to relaunch while a
     // game is up, so be more careful:
     //
     //   1. Never touch a file any process has mapped (best effort:
-    //      scan /proc/<pid>/maps; other users\x27 maps may be
+    //      scan /proc/<pid>/maps; other users' maps may be
     //      unreadable, which is why rule 2 also exists).
     //   2. Never touch a file modified in the last 60 seconds (a
     //      game that just started may not have its arena in a maps
     //      file we could read).
     //   3. Only our own files can actually be removed -
-    //      QFile::remove on another user\x27s arena just fails, which
+    //      QFile::remove on another user's arena just fails, which
     //      is the safe outcome anyway.
     //
     // It is a heuristic, not a lock: worst realistic case is leaving
