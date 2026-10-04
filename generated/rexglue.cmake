@@ -114,17 +114,26 @@ endmacro()
 # codegen, including one a project assembles itself rather than taking the
 # library rexglue_setup_target() builds. The stamp comes first: the DEPFILE
 # names it.
-add_custom_command(
-    OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/codegen.build.stamp"
-           ${REXGLUE_ENTRYPOINT_GENERATED_SOURCES}
-    COMMAND $<TARGET_FILE:rex::rexglue> codegen ${CMAKE_CURRENT_SOURCE_DIR}/splosionman_manifest.toml
-    DEPFILE "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/codegen.d"
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    COMMENT "Generating recompiled code for splosionman"
-    VERBATIM
-)
-add_custom_target(splosionman_codegen
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/codegen.build.stamp")
+# Codegen needs the proprietary default.xex. When it is absent (CI,
+# source-only checkouts), skip the rule entirely and compile the
+# committed generated/ tree as-is; the no-op target keeps the
+# add_dependencies() calls below valid. With the XEX present (a real
+# development tree), codegen behaves exactly as upstream.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/default.xex")
+    add_custom_command(
+        OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/codegen.build.stamp"
+               ${REXGLUE_ENTRYPOINT_GENERATED_SOURCES}
+        COMMAND $<TARGET_FILE:rex::rexglue> codegen ${CMAKE_CURRENT_SOURCE_DIR}/splosionman_manifest.toml
+        DEPFILE "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/codegen.d"
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Generating recompiled code for splosionman"
+        VERBATIM
+    )
+    add_custom_target(splosionman_codegen
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/codegen.build.stamp")
+else()
+    add_custom_target(splosionman_codegen)
+endif()
 
 # Include DLL module shared library targets if codegen has generated them
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/dll_targets.cmake")
