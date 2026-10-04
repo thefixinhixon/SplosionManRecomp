@@ -77,19 +77,22 @@ jobs:
           path: repo
           fetch-tags: false # see [B2]
 
-      - name: Check out ReXGlue SDK (pinned)
-        uses: actions/checkout@v4
-        with:
-          repository: rexglue/rexglue-sdk
-          ref: ${{ env.REXSDK_COMMIT }}
-          path: rexglue-sdk
+      - name: Check out ReXGlue SDK (pinned, LF endings)
+        shell: pwsh
+        # Manual clone with autocrlf OFF. actions/checkout on Windows
+        # materializes CRLF files, and git apply then rejects every hunk
+        # of the (LF) house patch -- run #1 failed exactly this way, all
+        # 57 files "patch does not apply". The build wants LF anyway.
+        run: |
+          git -c core.autocrlf=false clone --no-checkout https://github.com/rexglue/rexglue-sdk.git rexglue-sdk
+          git -C rexglue-sdk -c core.autocrlf=false checkout ${{ env.REXSDK_COMMIT }}
 
       - name: Apply house SDK patches
         shell: pwsh
         working-directory: rexglue-sdk
         # Verified locally: applies cleanly to a pristine checkout of
         # the pinned commit (git apply --check, 57 files).
-        run: git apply --whitespace=nowarn ../repo/patches/house-sdk.patch
+        run: git apply --whitespace=nowarn --ignore-whitespace ../repo/patches/house-sdk.patch
 
       - name: Keep codegen a no-op (no XEX in CI)
         shell: pwsh
