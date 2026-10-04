@@ -93,7 +93,17 @@ jobs:
         working-directory: rexglue-sdk
         # Verified locally: applies cleanly to a pristine checkout of
         # the pinned commit (git apply --check, 57 files).
-        run: git apply --whitespace=nowarn --ignore-whitespace ../repo/patches/house-sdk.patch
+        # The two D3D12 presenter files are EXCLUDED: the house patch
+        # carries a half-ported Dante-era feature there (guest-output
+        # shared textures) whose base-class half never landed in this
+        # SDK tree, and nothing else references it. It is invisible on
+        # Linux (D3D12 never compiles) but breaks the Windows build, so
+        # Windows uses the pristine upstream presenter for now.
+        run: >-
+          git apply --whitespace=nowarn --ignore-whitespace
+          --exclude=include/rex/ui/d3d12/d3d12_presenter.h
+          --exclude=src/ui/d3d12/d3d12_presenter.cpp
+          ../repo/patches/house-sdk.patch
 
       - name: Keep codegen a no-op (no XEX in CI)
         shell: pwsh
