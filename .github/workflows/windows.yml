@@ -86,6 +86,7 @@ jobs:
         run: |
           git -c core.autocrlf=false clone --no-checkout https://github.com/rexglue/rexglue-sdk.git rexglue-sdk
           git -C rexglue-sdk -c core.autocrlf=false checkout ${{ env.REXSDK_COMMIT }}
+          git -C rexglue-sdk -c core.autocrlf=false submodule update --init --recursive
 
       - name: Apply house SDK patches
         shell: pwsh
