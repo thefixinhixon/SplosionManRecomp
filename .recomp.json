@@ -1,1 +1,18 @@
-{"$schema":"https://recomp.fyi/schema/v1.json","approach":"Static recompilation of the Xbox 360 binary with ReXGlue, native Linux AppImage with Qt launcher, FSR and PipeWire audio","game":"'Splosion Man","maintainers":[{"link":"https://github.com/thefixinhixon","name":"thefixinhixon"}],"notes":"Linux v1.3 released; playable. A fresh recomp — no prior recomp or port of this game existed. Windows test build published as a pre-release.","project":"'Splosion Man Recomp","status":"released","system":"Xbox 360","targets":["Linux","Windows"],"toolchain":"ReXGlue","type":"recomp"}
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "'Splosion Man",
+  "system": "Xbox 360",
+  "type": "recomp",
+  "project": "'Splosion Man Recomp",
+  "status": "released",
+  "targets": ["Linux", "Windows", "Android"],
+  "toolchain": "ReXGlue",
+  "approach": "Static recompilation of the Xbox 360 binary with ReXGlue; native Linux AppImage and Windows build with a Qt launcher, in-game options menu, FSR and PipeWire audio",
+  "notes": "v2.2 released: playable on Linux, with a Windows test build; the Android build is a pre-release. v2.2 adds an unlocked frame rate (the game's physics are frame-rate independent), lower input latency (guest-side frame pacing, a one-frame queue, mailbox vsync), an in-game options menu (F1 or L3+R3) for frame cap, vsync, FSR/CAS upscaling, resolution, audio and controls, an FPS overlay, and a fix for a multi-GB /dev/shm leak on Linux. A fresh recomp: no earlier recomp or port of this game existed.",
+  "help": ["Testing the Windows build on real hardware"],
+  "tags": ["unlocked-fps", "low-latency", "fsr"],
+  "maintainers": [{ "name": "thefixinhixon", "link": "https://github.com/thefixinhixon" }],
+  "links": [
+    { "label": "Releases", "url": "https://github.com/thefixinhixon/SplosionManRecomp/releases" }
+  ]
+}
