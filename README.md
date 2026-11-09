@@ -133,6 +133,13 @@ and the game has no sound on PipeWire systems. (Ask us how we know.)
    libs, and `tp-launcher/` (CMake, `-DTP_GAME=splosionman`).
 4. Package with `packaging/appimage/build-appimage-x86_64.sh`.
 
+Release AppImages are built by the **Linux build** GitHub Actions workflow
+inside an Ubuntu 24.04 container, so they need only glibc 2.38 or newer
+(Steam Deck / SteamOS 3.7, Ubuntu 24.04+, Fedora 40+, Debian 13+, Arch).
+A build made directly on a newer distro needs that distro's glibc. To
+reproduce the release build locally with podman or docker:
+`packaging/linux/container-build.sh` (output in `out/ci-container/`).
+
 Note: **never mix** the executable and runtime libraries from
 different build sets — it corrupts the heap.
 

@@ -1,0 +1,55 @@
+# Linux AppImage build, portable: built inside ubuntu:24.04 so the binaries
+# need only glibc 2.39 (Steam Deck / SteamOS 3.7, Ubuntu 24.04+, Debian 13+,
+# Fedora 40+, Arch). The same scripts run locally with
+# packaging/linux/container-build.sh.
+
+name: Linux build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label for the AppImage file name (e.g. v2.3); empty = git describe"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  appimage:
+    name: AppImage (x86_64, glibc 2.39)
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:24.04
+      # The AppImage tools are run extracted; no FUSE needed.
+    steps:
+      - name: Install git
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates
+
+      - name: Check out this repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies (clang 20, GCC 13 libstdc++, Qt 6.8)
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          packaging/linux/deps-ubuntu2404.sh
+
+      - name: Build game, runtime and launcher; package the AppImage
+        env:
+          WORK: ${{ runner.temp }}/ci
+          VERSION: ${{ inputs.version }}
+        run: |
+          [ -n "$VERSION" ] || unset VERSION
+          packaging/linux/build-release.sh
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: splosionman-linux-appimage
+          path: ${{ runner.temp }}/ci/*.AppImage
+          if-no-files-found: error
