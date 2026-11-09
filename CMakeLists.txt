@@ -19,6 +19,9 @@ include(generated/rexglue.cmake)
 set(SPLOSIONMAN_SOURCES
     src/main.cpp
     src/stubs.cpp
+    src/splosionman_app.cpp
+    src/options_menu.cpp
+    src/recomp_options.cpp
 )
 
 if(WIN32)

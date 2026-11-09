@@ -61,6 +61,55 @@ included), from the shared launcher codebase in `tp-launcher/`:
 - On Linux, the launcher also vacuums leaked guest-memory mappings
   from crashed runs before launching
 
+## In-game options menu
+
+Press **F1** (keyboard) or **click both sticks (L3 + R3)** on a controller
+to open the recomp options over the game. The game pauses behind it
+(optional). D-pad / left stick or arrow keys move, Left / Right change a
+value, LB / RB (Q / E) switch pages, B / Esc closes, Y / R twice resets.
+The first page, **Game**, has Resume and **Quit game** (press twice to
+confirm; the options are saved first).
+
+| Page | Options |
+|---|---|
+| Performance | frame rate limit (30–360 or unlimited), VSync (off / low-latency / standard), frame queue depth, performance overlay (FPS or detailed), pause-while-open, fullscreen/windowed |
+| Graphics | upscaling (bilinear / AMD FSR 1 / AMD CAS) + sharpness, FXAA, internal resolution, native 2x MSAA, anisotropic filtering |
+| Audio | master volume (0–200%), mute, force stereo |
+| Controls | vibration strength, keyboard-as-controller |
+
+Everything except internal resolution, MSAA and force-stereo applies
+instantly. Choices are saved to `recomp_options.toml` in the game's data
+folder and override the launcher, **except** for a setting you later
+change in the launcher: then the launcher's new value wins.
+
+## Performance and latency
+
+'Splosion Man simulates with real elapsed time (its frame delta comes from
+the CPU timebase and is clamped), so it plays at the correct speed at any
+frame rate. This port is built around that:
+
+- **Unlocked frame rate.** The guest's vblank wait no longer caps the game
+  at 60 (or 30 — with the old defaults it could drop to exactly 30 once a
+  frame's CPU + GPU-thread work crossed one 16.6 ms vblank). A 2-second
+  run measured the same distance at 30 and ~90 fps.
+- **Low-latency frame pacing.** The frame limiter runs on the game thread
+  in `VdSwap`, *before* the next frame reads the controller, instead of
+  on the GPU thread after the frame was already simulated. Pacing is
+  deadline-based with a short spin, so a 60 fps cap gives 16.67 ms frames
+  (worst frame 17.2 ms measured).
+- **Bounded frame queue.** The game may run at most one frame ahead of the
+  GPU thread by default (`gpu_max_frames_ahead`), one frame less queued
+  input than before, at the same throughput.
+- **Low-latency VSync.** VSync uses mailbox presentation when the driver
+  offers it: no tearing, no display-queue lag, uncapped rendering.
+- **Less CPU waste.** Event-driven wakeups for multi-object waits (they
+  used to poll every 1 ms), no per-register `switch` lookup on the GPU
+  thread, bounded fence polling, and rate-limited logging for a draw the
+  game issues every frame with an unset vertex fetch constant.
+
+Diagnostics: `--perf_log_interval=2` logs fps, frame time, CPU work, GPU
+wait and limiter time every 2 seconds.
+
 ## Building from source
 
 ### Linux
@@ -70,12 +119,17 @@ dev, Vulkan headers, and **PipeWire + SPA development headers** —
 without them SDL silently builds *without* a PipeWire audio backend
 and the game has no sound on PipeWire systems. (Ask us how we know.)
 
-1. Build the ReXGlue SDK (`REXGLUE_ENABLE_FIDELITYFX=ON`).
+1. Check out the ReXGlue SDK at the commit pinned in
+   `.github/workflows/windows.yml` (`REXSDK_COMMIT`) and apply
+   `patches/house-sdk.patch` (`git apply --whitespace=nowarn`). All of
+   this port's runtime changes (pacing, menu hooks, perf fixes) are in
+   that patch. Build with `REXGLUE_ENABLE_FIDELITYFX=ON`.
 2. Codegen from your own `default.xex` (or use the included
    `generated/`): `rexglue codegen`, then `scripts/fix-labels.py` and
    `scripts/smart-patch.py` (host setjmp/longjmp registry, branch
    fixes).
-3. Build the game (CMake preset `linux-amd64`), the SDK runtime
+3. Build the game (CMake preset `linux-amd64-release`, with
+   `-DREXSDK_DIR=<sdk> -DREXGLUE_ENABLE_FIDELITYFX=ON`), the SDK runtime
    libs, and `tp-launcher/` (CMake, `-DTP_GAME=splosionman`).
 4. Package with `packaging/appimage/build-appimage-x86_64.sh`.
 
@@ -92,17 +146,18 @@ Qt 6.8 (MSVC). Trigger it from the Actions tab. The same steps work
 in a local Windows checkout with Visual Studio 2022 and Qt 6.8
 installed.
 
-## Known landmine (Linux): `/dev/shm` leaks
+## Fixed (Linux): `/dev/shm` leaks
 
-The runtime backs guest memory with a ~4.5 GB `xenia_memory_*` file
-in `/dev/shm` per run. Crashed or killed runs **leak** these files;
-when `/dev/shm` fills, new runs die with a bus error immediately
-after "Guest memory arena mapped" (launcher shows exit code 7). The
-launcher now cleans these up automatically before launching; if the
-game ever still refuses to start, check `df -h /dev/shm` and remove
-stale files: `rm /dev/shm/xenia_memory_*`. (Windows uses named
-page-file mappings that die with the process, so it doesn't have
-this problem.)
+The runtime backs guest memory with a ~4.8 GB `xenia_memory_*` file in
+`/dev/shm`. Older builds left that file behind after **every** run, not just
+crashes: closing the window hard-exits without running the cleanup. Once
+`/dev/shm` filled, new runs died with a bus error right after "Guest memory
+arena mapped" (the launcher showed exit code 7). The runtime now removes the
+file's name as soon as it is created, so the kernel frees the memory whenever
+the process ends, even after a crash or kill. Files left by older builds can
+be removed with `rm /dev/shm/xenia_memory_*` while the game isn't running
+(the launcher also does this before launching). Windows uses page-file
+mappings that die with the process, so it never had this problem.
 
 Also, on either platform: a crash while the shader cache writes can
 poison it — if the game starts freezing at the intro→3D transition,

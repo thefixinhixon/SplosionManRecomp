@@ -1,3 +1,22 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 9b3cdf5..eae503b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -186,9 +186,13 @@ add_compile_definitions(REXGLUE_BUILD_CONFIG="$<CONFIG>")
+ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/rex_pch.cmake)
+ 
+ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/rex_version.cmake)
++# Version from the SDK's own tree, not CMAKE_SOURCE_DIR: when the SDK is
++# consumed via add_subdirectory(), CMAKE_SOURCE_DIR is the game repo and its
++# release tags (e.g. v2.0) trip the floor check.
+ rex_resolve_version(REXGLUE_FULL_VERSION
+     FLOOR_MAJOR ${PROJECT_VERSION_MAJOR}
+-    FLOOR_MINOR ${PROJECT_VERSION_MINOR})
++    FLOOR_MINOR ${PROJECT_VERSION_MINOR}
++    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+ 
+ # Strip the -id trailer (if any) for the numeric-only version.
+ string(REGEX REPLACE "-.*$" "" REXGLUE_NUMERIC_VERSION "${REXGLUE_FULL_VERSION}")
 diff --git a/cmake/rexglue_fidelityfx.cmake b/cmake/rexglue_fidelityfx.cmake
 index af35fa8..0ab179e 100644
 --- a/cmake/rexglue_fidelityfx.cmake
@@ -23,8 +42,25 @@ index af35fa8..0ab179e 100644
  set(REXGLUE_FIDELITYFX_SOURCE_DIR "${fidelityfx_SOURCE_DIR}" CACHE INTERNAL
      "Root of the fetched FidelityFX SDK source tree")
  
+diff --git a/include/rex/cvar.h b/include/rex/cvar.h
+index fe94186..7531fea 100644
+--- a/include/rex/cvar.h
++++ b/include/rex/cvar.h
+@@ -190,6 +190,12 @@ std::optional<size_t> RegisterFlag(FlagEntry entry);
+ void UnregisterFlag(std::string_view name);
+ 
+ bool SetFlagByName(std::string_view name, std::string_view value);
++// Like SetFlagByName, but if the flag is not registered yet (it lives in a
++// plugin loaded later), the value is kept and applied with runtime priority
++// when the flag registers.
++bool SetFlagByNameOrDefer(std::string_view name, std::string_view value);
++// The command-line value given for a flag that has not registered yet.
++std::optional<std::string> GetPendingCommandLineValue(std::string_view name);
+ 
+ // Applies a value parsed off the command line. Returns false only when the
+ // value is rejected (unparseable, or outside the flag's constraints); a value
 diff --git a/include/rex/graphics/command_processor.h b/include/rex/graphics/command_processor.h
-index da8e432..26b6205 100644
+index da8e432..d22ff83 100644
 --- a/include/rex/graphics/command_processor.h
 +++ b/include/rex/graphics/command_processor.h
 @@ -12,6 +12,8 @@
@@ -36,7 +72,7 @@ index da8e432..26b6205 100644
  #include <cstring>
  #include <functional>
  #include <memory>
-@@ -84,8 +86,19 @@ class CommandProcessor {
+@@ -84,8 +86,22 @@ class CommandProcessor {
    CommandProcessor(GraphicsSystem* graphics_system, system::KernelState* kernel_state);
    virtual ~CommandProcessor();
  
@@ -51,14 +87,17 @@ index da8e432..26b6205 100644
 +    }
 +    vblank_cv_.notify_all();
 +  }
-+  uint32_t swap_counter() const { return swap_counter_.load(std::memory_order_relaxed); }
++  uint32_t swap_counter() const { return swap_counter_.load(std::memory_order_acquire); }
++  // Blocks until at least `target` swaps have been executed by the command
++  // processor, or the timeout passes. Returns true if the target was reached.
++  bool WaitForSwapCount(uint32_t target, std::chrono::microseconds timeout);
 +  uint32_t vblank_counter() const {
 +    return vblank_counter_.load(std::memory_order_relaxed);
 +  }
  
    Shader* active_vertex_shader() const { return active_vertex_shader_; }
    Shader* active_pixel_shader() const { return active_pixel_shader_; }
-@@ -221,6 +234,10 @@ class CommandProcessor {
+@@ -221,6 +237,10 @@ class CommandProcessor {
                           IndexBufferInfo* index_buffer_info, bool major_mode_explicit) = 0;
    virtual bool IssueCopy() = 0;
  
@@ -69,13 +108,15 @@ index da8e432..26b6205 100644
    // "Actual" is for the command processor thread, to be read by the
    // implementations.
    SwapPostEffect GetActualSwapPostEffect() const { return swap_post_effect_actual_; }
-@@ -243,7 +260,13 @@ class CommandProcessor {
+@@ -243,7 +263,15 @@ class CommandProcessor {
    // MicroEngine binary from PM4_ME_INIT
    std::vector<uint32_t> me_bin_;
  
 -  uint32_t counter_ = 0;
 +  std::atomic<uint32_t> counter_ = 0;
 +  std::atomic<uint32_t> swap_counter_ = 0;
++  std::mutex swap_mutex_;
++  std::condition_variable swap_cv_;
 +  std::mutex vblank_mutex_;
 +  std::condition_variable vblank_cv_;
 +  std::atomic<uint32_t> vblank_counter_ = 0;
@@ -153,6 +194,61 @@ index 2cf24c4..3c4b107 100644
  // GPU Debug
  REXCVAR_DECLARE(bool, gpu_debug_markers);
  bool IsGpuDebugMarkersEnabled();
+diff --git a/include/rex/graphics/graphics_system.h b/include/rex/graphics/graphics_system.h
+index ac6b056..6a513de 100644
+--- a/include/rex/graphics/graphics_system.h
++++ b/include/rex/graphics/graphics_system.h
+@@ -14,6 +14,9 @@
+ #include "rex/system/function_dispatcher.h"
+ 
+ #include <atomic>
++#include <chrono>
++#include <condition_variable>
++#include <mutex>
+ #include <cstdint>
+ #include <functional>
+ #include <memory>
+@@ -83,6 +86,10 @@ class GraphicsSystem : public system::IGraphicsSystem {
+   void InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,
+                                bool blocking) override;
+ 
++  void OnGuestSwap() override;
++  void SetGuestFrameHold(bool hold) override;
++  bool GetGuestFrameStats(system::GuestFrameStats* out) const override;
++
+   bool is_paused() const { return paused_; }
+   void Pause();
+   void Resume();
+@@ -126,6 +133,29 @@ class GraphicsSystem : public system::IGraphicsSystem {
+ 
+   bool paused_ = false;
+ 
++  // Guest frame pacing (OnGuestSwap runs on whichever guest thread calls
++  // VdSwap; a title swaps from one thread at a time, so these are touched by
++  // one thread except for the published stats).
++  struct PacingState {
++    uint32_t guest_swaps = 0;
++    std::chrono::steady_clock::time_point next_deadline{};
++    std::chrono::steady_clock::time_point last_swap{};
++    bool ahead_wait_timed_out_logged = false;
++    // Rolling window accumulators.
++    std::chrono::steady_clock::time_point window_start{};
++    uint32_t window_frames = 0;
++    double window_frame_ms_sum = 0.0;
++    double window_frame_ms_max = 0.0;
++    double window_gpu_wait_ms = 0.0;
++    double window_limiter_ms = 0.0;
++    std::chrono::steady_clock::time_point last_perf_log{};
++  } pacing_;
++  mutable std::mutex pacing_stats_mutex_;
++  std::mutex frame_hold_mutex_;
++  std::condition_variable frame_hold_cv_;
++  bool frame_hold_ = false;
++  system::GuestFrameStats pacing_stats_{};
++
+  private:
+   std::unique_ptr<::rex::ui::Presenter> presenter_;
+ 
 diff --git a/include/rex/graphics/pipeline/shader/dxbc_translator.h b/include/rex/graphics/pipeline/shader/dxbc_translator.h
 index 3b0fd61..826044e 100644
 --- a/include/rex/graphics/pipeline/shader/dxbc_translator.h
@@ -357,7 +453,7 @@ index 7b938b9..fd1b380 100644
    void StorageWriteThread();
    std::mutex storage_write_request_lock_;
 diff --git a/include/rex/input/input_system.h b/include/rex/input/input_system.h
-index 1cb3faa..6ad692b 100644
+index 1cb3faa..c8c3133 100644
 --- a/include/rex/input/input_system.h
 +++ b/include/rex/input/input_system.h
 @@ -11,6 +11,7 @@
@@ -368,7 +464,32 @@ index 1cb3faa..6ad692b 100644
  #include <vector>
  
  #include <rex/input/device_assignment.h>
-@@ -65,6 +66,13 @@ class InputSystem : public system::IInputSystem {
+@@ -38,12 +39,24 @@ class InputSystem : public system::IInputSystem {
+   void AddDriver(std::unique_ptr<InputDriver> driver);
+   void AttachWindow(rex::ui::Window* window);
+   void SetActiveCallback(std::function<bool()> callback);
++  /// Called with every merged state returned to the guest (any thread, under
++  /// the input lock). The filter may observe the state (e.g. a menu chord)
++  /// and modify it (e.g. neutralize it while an overlay owns the pad).
++  using StateFilter = std::function<void(uint32_t user_index, X_INPUT_STATE& state)>;
++  void SetStateFilter(StateFilter filter);
++  /// Same for vibration requests from the guest, before they reach the pad.
++  using VibrationFilter = std::function<void(uint32_t user_index, X_INPUT_VIBRATION& vibration)>;
++  void SetVibrationFilter(VibrationFilter filter);
+ 
+   /// Replaces any previous assignment. Call before the guest starts polling.
+   void SetDeviceAssignment(std::unique_ptr<DeviceAssignment> assignment);
+ 
+   X_RESULT GetCapabilities(uint32_t user_index, uint32_t flags, X_INPUT_CAPABILITIES* out_caps);
+   X_RESULT GetState(uint32_t user_index, X_INPUT_STATE* out_state);
++  /// Merged state of the physical pads assigned to a user, skipping synthetic
++  /// devices (keyboard emulation) and the state filter. For host UI (menus)
++  /// that reads the keyboard separately.
++  X_RESULT GetPhysicalPadState(uint32_t user_index, X_INPUT_STATE* out_state);
+   X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
+   X_RESULT GetKeystroke(uint32_t user_index, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke);
+ 
+@@ -65,6 +78,15 @@ class InputSystem : public system::IInputSystem {
    // does not renumber pad two.
    std::vector<DeviceInfo> devices_;
    std::vector<InputDriver*> device_owners_;
@@ -379,9 +500,55 @@ index 1cb3faa..6ad692b 100644
 +  // so concurrent polls corrupted DeviceInfo strings and detonated as a
 +  // double-free inside RefreshDevices. Serialize the polling surface.
 +  mutable std::recursive_mutex mutex_;
++  StateFilter state_filter_;
++  VibrationFilter vibration_filter_;
  };
  
  /// Create a default InputSystem with SDL + NOP drivers.
+diff --git a/include/rex/system/interfaces/graphics.h b/include/rex/system/interfaces/graphics.h
+index d54df86..aadd2e8 100644
+--- a/include/rex/system/interfaces/graphics.h
++++ b/include/rex/system/interfaces/graphics.h
+@@ -31,6 +31,17 @@ class KernelState;
+ 
+ namespace rex::system {
+ 
++// Guest frame pacing statistics, averaged over a short rolling window.
++struct GuestFrameStats {
++  double fps = 0.0;            // guest frames (VdSwap calls) per second
++  double frame_ms = 0.0;       // average guest frame interval
++  double frame_max_ms = 0.0;   // worst guest frame interval in the window
++  double work_ms = 0.0;        // frame interval minus pacing waits (CPU-side frame cost)
++  double gpu_wait_ms = 0.0;    // time the guest waited for the GPU thread (frames-ahead bound)
++  double limiter_ms = 0.0;     // time the guest slept in the frame limiter
++  uint64_t frame_count = 0;    // total guest frames
++};
++
+ class IGraphicsSystem {
+  public:
+   virtual ~IGraphicsSystem() = default;
+@@ -71,6 +82,21 @@ class IGraphicsSystem {
+     (void)block_size_log2;
+   }
+ 
++  // Called by VdSwap on the guest thread right after the swap packet has been
++  // written into the ring buffer, before the title starts its next frame. The
++  // frame limiter and the frames-ahead bound live here so they delay the start
++  // of the next simulated frame (lower input latency) instead of queuing an
++  // already-simulated frame inside the GPU thread.
++  virtual void OnGuestSwap() {}
++  // While held, the guest thread blocks in VdSwap after finishing its frame:
++  // the game is frozen on a complete frame (used to pause behind overlays).
++  // Titles that clamp their frame delta resume without a time jump.
++  virtual void SetGuestFrameHold(bool hold) { (void)hold; }
++  // Latest pacing statistics; false when the backend does not track them.
++  virtual bool GetGuestFrameStats(GuestFrameStats* out) const {
++    (void)out;
++    return false;
++  }
+   // Persistent shader/pipeline storage under the cache root. Default: none.
+   virtual void InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,
+                                        bool blocking) {
 diff --git a/include/rex/system/mmio_handler.h b/include/rex/system/mmio_handler.h
 index 7ae42a8..e51caf7 100644
 --- a/include/rex/system/mmio_handler.h
@@ -424,6 +591,20 @@ index 83d09f7..be3e231 100644
    // The guest output resources are protected by two submission trackers - the
    // refresher ones (for writing to them via the guest_output_resources_
    // references) and the paint one (for presenting it via the
+diff --git a/include/rex/ui/presenter.h b/include/rex/ui/presenter.h
+index afb4a30..af58f46 100644
+--- a/include/rex/ui/presenter.h
++++ b/include/rex/ui/presenter.h
+@@ -367,6 +367,9 @@ class Presenter {
+   }
+   // For simplicity, may be called repeatedly even if no changes have been made.
+   void SetGuestOutputPaintConfigFromUIThread(const GuestOutputPaintConfig& new_config);
++  // Rebuilds the guest output paint config (upscaler, sharpness, dither) from
++  // the present_* cvars and applies it live. Safe to call from UI drawers.
++  void ReloadGuestOutputPaintConfigFromCVarsFromUIThread();
+ 
+   void AddUIDrawerFromUIThread(UIDrawer* drawer, size_t z_order);
+   void RemoveUIDrawerFromUIThread(UIDrawer* drawer);
 diff --git a/resources/templates/codegen/pch_h.inja b/resources/templates/codegen/pch_h.inja
 index 68274d2..d1f7cdd 100644
 --- a/resources/templates/codegen/pch_h.inja
@@ -440,6 +621,59 @@ index 68274d2..d1f7cdd 100644
  #include <atomic>
  #include <cassert>
  #include <csetjmp>
+diff --git a/src/audio/sdl/sdl_audio_driver.cpp b/src/audio/sdl/sdl_audio_driver.cpp
+index 20a2cd8..8b39d29 100644
+--- a/src/audio/sdl/sdl_audio_driver.cpp
++++ b/src/audio/sdl/sdl_audio_driver.cpp
+@@ -25,6 +25,15 @@
+ #include <SDL3/SDL.h>
+ 
+ REXCVAR_DEFINE_BOOL(audio_mute, false, "Audio", "Mute audio output");
++REXCVAR_DEFINE_DOUBLE(audio_output_gain, 1.0, "Audio",
++                      "Master output gain, linear (1.0 = unity). Seeds the output stage's "
++                      "gain at startup; above unity can clip, and the output stage clamps")
++    .range(0.0, 4.0)
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++REXCVAR_DEFINE_BOOL(audio_force_stereo, false, "Audio",
++                    "Always submit a stereo fold of the 5.1 mix, even when the device "
++                    "reports more than two channels")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+ 
+ namespace rex::audio::sdl {
+ 
+@@ -49,6 +58,8 @@ bool SDLAudioDriver::Initialize() {
+   }
+   sdl_initialized_ = true;
+ 
++  SetOutputGain(static_cast<float>(REXCVAR_GET(audio_output_gain)));
++
+   SDL_AudioSpec desired_spec = {};
+   SDL_AudioSpec obtained_spec = {};
+   desired_spec.freq = frame_frequency_;
+@@ -75,7 +86,9 @@ bool SDLAudioDriver::Initialize() {
+ 
+   // A 1-channel device gets the stereo fold too, then SDL collapses to mono.
+   // Handing it a 6ch stream instead would use SDL's own downmix.
+-  if (obtained_spec.channels <= 2) {
++  // audio_force_stereo takes the same path on a surround device, for
++  // headphones behind a 5.1 sink or a system that routes 5.1 badly.
++  if (obtained_spec.channels <= 2 || REXCVAR_GET(audio_force_stereo)) {
+     SDL_DestroyAudioStream(sdl_stream_);
+     sdl_stream_ = nullptr;
+     desired_spec.channels = 2;
+@@ -97,9 +110,10 @@ bool SDLAudioDriver::Initialize() {
+   // first thing worth knowing when a report says the balance is wrong on one
+   // speaker setup and right on another.
+   const char* device_name = SDL_GetAudioDeviceName(sdl_device);
+-  REXAPU_INFO("audio endpoint '{}': {} ch, {} Hz, format 0x{:04X}; submitting {} ch",
++  REXAPU_INFO("audio endpoint '{}': {} ch, {} Hz, format 0x{:04X}; submitting {} ch, gain {:.2f}",
+               device_name ? device_name : "?", obtained_spec.channels, obtained_spec.freq,
+-              static_cast<uint32_t>(obtained_spec.format), static_cast<int>(sdl_device_channels_));
++              static_cast<uint32_t>(obtained_spec.format), static_cast<int>(sdl_device_channels_),
++              GetOutputGain());
+ 
+   if (!SDL_ResumeAudioDevice(sdl_device)) {
+     REXAPU_ERROR("SDL_ResumeAudioDevice() failed: {}", SDL_GetError());
 diff --git a/src/codegen/analyze.cpp b/src/codegen/analyze.cpp
 index c5f3d14..8da9084 100644
 --- a/src/codegen/analyze.cpp
@@ -1021,10 +1255,18 @@ index fdecb6f..ea847f4 100644
 +
  }  // namespace rex::codegen
 diff --git a/src/core/cvar.cpp b/src/core/cvar.cpp
-index 228728d..8424fb3 100644
+index 228728d..6822d3b 100644
 --- a/src/core/cvar.cpp
 +++ b/src/core/cvar.cpp
-@@ -229,7 +229,28 @@ std::optional<size_t> RegisterFlag(FlagEntry entry) {
+@@ -60,6 +60,7 @@ std::unordered_map<std::string, size_t>& GetRegistryIndex() {
+ struct PendingValues {
+   std::optional<std::string> cmdline;
+   std::optional<std::string> config;
++  std::optional<std::string> runtime;  // SetFlagByNameOrDefer before registration
+ };
+ 
+ std::unordered_map<std::string, PendingValues>& GetPendingValuesStorage() {
+@@ -229,7 +230,28 @@ std::optional<size_t> RegisterFlag(FlagEntry entry) {
    auto& storage = GetRegistryStorage();
    auto it = index.find(entry.name);
    if (it != index.end()) {
@@ -1054,6 +1296,341 @@ index 228728d..8424fb3 100644
      return std::nullopt;
    }
    size_t pos = storage.size();
+@@ -252,6 +274,9 @@ std::optional<size_t> RegisterFlag(FlagEntry entry) {
+       if (pending_it->second.cmdline) {
+         ApplyFromSource(stored, *pending_it->second.cmdline, Source::kCommandLine);
+       }
++      if (pending_it->second.runtime) {
++        ApplyFromSource(stored, *pending_it->second.runtime, Source::kRuntime);
++      }
+       pending.erase(pending_it);
+     }
+   }
+@@ -343,6 +368,27 @@ bool SetFlagByName(std::string_view name, std::string_view value) {
+   return SetFlagFromSource(name, value, Source::kRuntime) == ApplyResult::kApplied;
+ }
+ 
++bool SetFlagByNameOrDefer(std::string_view name, std::string_view value) {
++  {
++    std::lock_guard lock(GetRegistryMutex());
++    if (GetRegistryIndex().find(std::string(name)) == GetRegistryIndex().end()) {
++      GetPendingValuesStorage()[std::string(name)].runtime = std::string(value);
++      return true;
++    }
++  }
++  return SetFlagByName(name, value);
++}
++
++std::optional<std::string> GetPendingCommandLineValue(std::string_view name) {
++  std::lock_guard lock(GetRegistryMutex());
++  auto& pending = GetPendingValuesStorage();
++  auto it = pending.find(std::string(name));
++  if (it == pending.end() || !it->second.cmdline) {
++    return std::nullopt;
++  }
++  return it->second.cmdline;
++}
++
+ bool SetFlagFromCommandLine(std::string_view name, std::string_view value) {
+   return SetFlagFromSource(name, value, Source::kCommandLine) != ApplyResult::kRejected;
+ }
+diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
+index b52bf39..cd1014e 100644
+--- a/src/core/memory_posix.cpp
++++ b/src/core/memory_posix.cpp
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay & Rien Gupta, 2026 - Adapted for ReXGlue runtime (POSIX + macOS)
+  */
+ 
++#include <atomic>
+ #include <cerrno>
+ #include <cstddef>
+ #include <cstdio>
+@@ -18,6 +19,10 @@
+ #include <string>
+ 
+ #include <fcntl.h>
++#if defined(__linux__)
++#include <linux/fs.h>
++#include <sys/ioctl.h>
++#endif
+ 
+ #if REX_PLATFORM_MAC
+ #include <mach/mach.h>
+@@ -170,9 +175,65 @@ static bool ParseProcMapsLine(const std::string& line, LinuxMapEntry& out) {
+   return out.start < out.end;
+ }
+ 
++#ifdef PROCMAP_QUERY
++// PROCMAP_QUERY (Linux 6.11+) returns the VMA covering an address with one
++// ioctl instead of reading and parsing /proc/self/maps as text. That matters
++// because QueryProtect runs in the MMIO / write-watch fault handler on game
++// threads (profiled: up to a third of the main game thread's time went to maps
++// parsing), and the ioctl, unlike std::ifstream, is async-signal-safe.
++// Result: 1 = found, 0 = not mapped, -1 = unsupported (use the text parser).
++static std::atomic<int> g_procmap_fd{-1};
++static std::atomic<bool> g_procmap_unsupported{false};
++
++static int ProcMapQuery(uintptr_t addr, LinuxMapEntry& out) {
++  if (g_procmap_unsupported.load(std::memory_order_relaxed)) {
++    return -1;
++  }
++  int fd = g_procmap_fd.load(std::memory_order_acquire);
++  if (fd < 0) {
++    const int new_fd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
++    if (new_fd < 0) {
++      return -1;
++    }
++    int expected = -1;
++    if (g_procmap_fd.compare_exchange_strong(expected, new_fd, std::memory_order_acq_rel)) {
++      fd = new_fd;
++    } else {
++      close(new_fd);
++      fd = expected;
++    }
++  }
++  procmap_query q = {};
++  q.size = sizeof(q);
++  q.query_flags = 0;  // Only the VMA covering query_addr.
++  q.query_addr = addr;
++  if (ioctl(fd, PROCMAP_QUERY, &q) != 0) {
++    if (errno == ENOENT) {
++      return 0;
++    }
++    g_procmap_unsupported.store(true, std::memory_order_relaxed);
++    return -1;
++  }
++  out = LinuxMapEntry{};
++  out.start = static_cast<uintptr_t>(q.vma_start);
++  out.end = static_cast<uintptr_t>(q.vma_end);
++  out.perms[0] = (q.vma_flags & PROCMAP_QUERY_VMA_READABLE) ? 'r' : '-';
++  out.perms[1] = (q.vma_flags & PROCMAP_QUERY_VMA_WRITABLE) ? 'w' : '-';
++  out.perms[2] = (q.vma_flags & PROCMAP_QUERY_VMA_EXECUTABLE) ? 'x' : '-';
++  out.perms[3] = (q.vma_flags & PROCMAP_QUERY_VMA_SHARED) ? 's' : 'p';
++  return 1;
++}
++#endif  // PROCMAP_QUERY
++
+ // Find the mapping entry in /proc/self/maps that contains the given address
+ static bool FindEntryForAddress(void* address, LinuxMapEntry& out_entry) {
+   const uintptr_t addr = reinterpret_cast<uintptr_t>(address);
++#ifdef PROCMAP_QUERY
++  const int query_result = ProcMapQuery(addr, out_entry);
++  if (query_result >= 0) {
++    return query_result == 1;
++  }
++#endif
+   std::ifstream maps("/proc/self/maps");
+   if (!maps.is_open())
+     return false;
+@@ -200,6 +261,24 @@ static bool IsRangeFullyMapped(void* base_address, size_t length) {
+     return false;
+   }
+ 
++#ifdef PROCMAP_QUERY
++  {
++    uintptr_t query_cursor = begin;
++    int query_result = 1;
++    while (query_cursor < end) {
++      LinuxMapEntry e;
++      query_result = ProcMapQuery(query_cursor, e);
++      if (query_result != 1) {
++        break;
++      }
++      query_cursor = e.end;
++    }
++    if (query_result >= 0) {
++      return query_result == 1;  // 0: gap found.
++    }
++  }
++#endif
++
+   std::ifstream maps("/proc/self/maps");
+   if (!maps.is_open())
+     return false;
+@@ -483,6 +562,11 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
+     shm_unlink(full_path.c_str());
+     return kFileMappingHandleInvalid;
+   }
++  // Nothing reopens the mapping by name (only this fd is mapped), so drop the
++  // name now. The fd and its views keep the memory alive and the kernel frees
++  // it when the process ends, however it ends: a crash, a kill or the hard
++  // _Exit on window close would otherwise leave a multi-GB file in /dev/shm.
++  shm_unlink(full_path.c_str());
+   return static_cast<FileMappingHandle>(ret);
+ #endif
+ }
+diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
+index 9ac8d15..7e72027 100644
+--- a/src/core/threading_posix.cpp
++++ b/src/core/threading_posix.cpp
+@@ -31,6 +31,9 @@ static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only")
+ #include <fcntl.h>
+ #endif
+ #include <sys/syscall.h>
++#if defined(__linux__)
++#include <linux/futex.h>
++#endif
+ #include <sys/time.h>
+ #include <sys/types.h>
+ #include <unistd.h>
+@@ -267,8 +270,28 @@ static sem_t* RexCreateAnonymousSemaphore() {
+ }
+ #endif  // __APPLE__
+ 
++// Wakeup channel for WaitMultiple. Waiting on several handles cannot block on
++// one condition variable, so multi-waits used to sleep 1 ms and re-poll, which
++// delayed every wakeup by up to a millisecond (frame events, GPU fences, audio
++// callbacks). Now every signal bumps a generation counter and multi-waiters
++// block on it with a futex, waking as soon as anything is signaled.
++namespace {
++std::atomic<uint32_t> g_signal_generation{0};
++std::atomic<int32_t> g_multi_waiters{0};
++}  // namespace
++
+ class PosixConditionBase {
+  public:
++  static void NotifyMultiWaiters() {
++    g_signal_generation.fetch_add(1, std::memory_order_seq_cst);
++    if (g_multi_waiters.load(std::memory_order_seq_cst) > 0) {
++#if REX_PLATFORM_LINUX
++      syscall(SYS_futex, reinterpret_cast<uint32_t*>(&g_signal_generation), FUTEX_WAKE_PRIVATE,
++              INT32_MAX, nullptr, nullptr, 0);
++#endif
++    }
++  }
++
+   PosixConditionBase() {
+ #if REX_PLATFORM_LINUX
+     // Use robust mutexes so waits can recover if owner thread terminates.
+@@ -335,7 +358,13 @@ class PosixConditionBase {
+                         ? std::chrono::steady_clock::time_point::max()
+                         : start_time + timeout;
+ 
++    g_multi_waiters.fetch_add(1, std::memory_order_seq_cst);
++    struct MultiWaiterGuard {
++      ~MultiWaiterGuard() { g_multi_waiters.fetch_sub(1, std::memory_order_seq_cst); }
++    } multi_waiter_guard;
++
+     while (true) {
++      const uint32_t generation = g_signal_generation.load(std::memory_order_seq_cst);
+       size_t first_signaled = std::numeric_limits<size_t>::max();
+       bool condition_met = false;
+       bool all_locked = true;
+@@ -411,13 +440,28 @@ class PosixConditionBase {
+         return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
+       }
+ 
+-      if (timeout == std::chrono::milliseconds::max()) {
+-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+-      } else {
+-        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now);
+-        auto sleep_time = std::min(remaining, std::chrono::milliseconds(1));
+-        std::this_thread::sleep_for(sleep_time);
++      // Block until any handle is signaled (generation changes) or for the
++      // real remaining time capped at 1 ms (a safety net for state changes
++      // that do not go through NotifyMultiWaiters). Truncating the remaining
++      // time to whole milliseconds once made the final sub-millisecond stretch
++      // a hot spin (~16 million trylocks/s on the Audio Worker).
++      auto sleep_time = std::chrono::microseconds(std::chrono::milliseconds(1));
++      if (timeout != std::chrono::milliseconds::max()) {
++        auto remaining = std::chrono::duration_cast<std::chrono::microseconds>(end_time - now);
++        sleep_time = std::min(remaining, sleep_time);
+       }
++#if REX_PLATFORM_LINUX
++      if (g_signal_generation.load(std::memory_order_seq_cst) == generation) {
++        timespec ts;
++        ts.tv_sec = time_t(sleep_time.count() / 1000000);
++        ts.tv_nsec = long(sleep_time.count() % 1000000) * 1000;
++        syscall(SYS_futex, reinterpret_cast<uint32_t*>(&g_signal_generation), FUTEX_WAIT_PRIVATE,
++                generation, &ts, nullptr, 0);
++      }
++#else
++      (void)generation;
++      std::this_thread::sleep_for(sleep_time);
++#endif
+     }
+   }
+ 
+@@ -450,6 +494,7 @@ class PosixCondition<Event> : public PosixConditionBase {
+     auto lock = std::unique_lock<std::mutex>(mutex_);
+     signal_ = true;
+     cond_.notify_all();
++    NotifyMultiWaiters();
+     return true;
+   }
+ 
+@@ -487,6 +532,7 @@ class PosixCondition<Semaphore> : public PosixConditionBase {
+     }
+     count_ += release_count;
+     cond_.notify_all();
++    NotifyMultiWaiters();
+     return true;
+   }
+ 
+@@ -519,6 +565,7 @@ class PosixCondition<Mutant> : public PosixConditionBase {
+       // Free to be acquired by another thread
+       if (count_ == 0) {
+         cond_.notify_all();
++        NotifyMultiWaiters();
+       }
+       return true;
+     }
+@@ -551,6 +598,7 @@ class PosixCondition<Timer> : public PosixConditionBase {
+     std::lock_guard<std::mutex> lock(mutex_);
+     signal_ = true;
+     cond_.notify_all();
++    NotifyMultiWaiters();
+     return true;
+   }
+ 
+@@ -979,6 +1027,7 @@ class PosixCondition<Thread> : public PosixConditionBase {
+       exit_code_ = exit_code;
+       signaled_ = true;
+       cond_.notify_all();
++      NotifyMultiWaiters();
+     }
+     if (is_current_thread) {
+       pthread_exit(reinterpret_cast<void*>(exit_code));
+@@ -1449,6 +1498,7 @@ void* PosixCondition<Thread>::ThreadStartRoutine(void* parameter) {
+     thread->handle_.exit_code_ = 0;
+     thread->handle_.signaled_ = true;
+     thread->handle_.cond_.notify_all();
++    PosixConditionBase::NotifyMultiWaiters();
+   }
+ 
+   current_thread_ = nullptr;
+diff --git a/src/core/timer_queue.cpp b/src/core/timer_queue.cpp
+index 5cfea05..ce0af9f 100644
+--- a/src/core/timer_queue.cpp
++++ b/src/core/timer_queue.cpp
+@@ -15,7 +15,7 @@
+ #include <disruptorplus/multi_threaded_claim_strategy.hpp>
+ #include <disruptorplus/ring_buffer.hpp>
+ #include <disruptorplus/sequence_barrier.hpp>
+-#include <disruptorplus/spin_wait_strategy.hpp>
++#include <disruptorplus/blocking_wait_strategy.hpp>
+ 
+ #include <rex/assert.h>
+ #include <rex/thread.h>
+@@ -142,9 +142,14 @@ class TimerQueue {
+   // This ring buffer will be used to introduce timers queued by the public API
+   static constexpr size_t kWaitCount = 512;
+   dp::ring_buffer<std::shared_ptr<WaitItem>> buffer_;
+-  dp::spin_wait_strategy wait_strategy_;
+-  dp::multi_threaded_claim_strategy<dp::spin_wait_strategy> claim_strategy_;
+-  dp::sequence_barrier<dp::spin_wait_strategy> consumed_;
++  // Blocking (condition variable) rather than spin: the dispatch thread waits
++  // for the next due time or a newly queued timer. The spin strategy yielded
++  // ~10,000 times/s on an idle queue (~20% of a CPU, stealing from the game
++  // thread's hyper-thread sibling) and called hardware_concurrency(), which
++  // re-reads /sys/devices/system/cpu/online, on every wait.
++  dp::blocking_wait_strategy wait_strategy_;
++  dp::multi_threaded_claim_strategy<dp::blocking_wait_strategy> claim_strategy_;
++  dp::sequence_barrier<dp::blocking_wait_strategy> consumed_;
+ 
+   // This is a _sorted_ (ascending due_) list of active timers managed by a
+   // dedicated thread
 diff --git a/src/filesystem/entry.cpp b/src/filesystem/entry.cpp
 index 163c257..c01e0e3 100644
 --- a/src/filesystem/entry.cpp
@@ -1089,10 +1666,10 @@ index 163c257..c01e0e3 100644
  }
  
 diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
-index a744375..09f04be 100644
+index a744375..742697c 100644
 --- a/src/graphics/command_processor.cpp
 +++ b/src/graphics/command_processor.cpp
-@@ -11,9 +11,12 @@
+@@ -11,9 +11,13 @@
  
  #include <algorithm>
  #include <cinttypes>
@@ -1102,10 +1679,11 @@ index a744375..09f04be 100644
  #include <string_view>
 +#include <thread>
 +#include <unordered_set>
++#include <vector>
  
  #include <fmt/format.h>
  
-@@ -24,6 +27,7 @@
+@@ -24,6 +28,7 @@
  #include <rex/graphics/command_processor.h>
  #include <rex/graphics/flags.h>
  #include <rex/graphics/graphics_system.h>
@@ -1113,14 +1691,15 @@ index a744375..09f04be 100644
  #include <rex/graphics/pipeline/texture/info.h>
  #include <rex/graphics/sampler_info.h>
  #include <rex/graphics/xenos.h>
-@@ -37,6 +41,16 @@
+@@ -37,6 +42,17 @@
  
  REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");
  
 +REXCVAR_DEFINE_INT32(frame_limit, 60, "GPU",
-+                     "Frame rate limit in FPS (0 = unlimited). Paces guest "
-+                     "swaps so game speed stays correct when vsync is off or "
-+                     "on high-refresh displays.");
++                     "Frame rate limit in FPS (0 = unlimited). Applied on the guest "
++                     "thread at VdSwap, before the next frame samples input.")
++    .range(0, 1000)
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 +
 +REXCVAR_DEFINE_BOOL(vfetch_oob_trace, true, "Diagnostics",
 +                    "Log draws whose vertex fetches read outside the declared "
@@ -1130,51 +1709,86 @@ index a744375..09f04be 100644
  REXCVAR_DEFINE_BOOL(clear_memory_page_state, true, "GPU",
                      "Refresh page-valid state from GPU-written memory at frame end. "
                      "Disable for minor CPU overhead reduction, but may break memory coherency.")
-@@ -958,9 +972,43 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
+@@ -355,7 +371,16 @@ void CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
+ 
+   // Volatile for the WAIT_REG_MEM loop.
+   const_cast<volatile uint32_t&>(regs.values[index]) = value;
+-  if (!regs.GetRegisterInfo(index)) {
++  // GetRegisterInfo is a large switch; it ran on every register write only to
++  // feed this debug line. Look the answer up in a table built once instead.
++  static const auto* const known_registers = [] {
++    auto* known = new std::vector<bool>(RegisterFile::kRegisterCount);
++    for (uint32_t i = 0; i < RegisterFile::kRegisterCount; ++i) {
++      (*known)[i] = RegisterFile::GetRegisterInfo(i) != nullptr;
++    }
++    return known;
++  }();
++  if (!(*known_registers)[index]) {
+     REXGPU_DEBUG("GPU: Write to unknown register ({:04X} = {:08X})", index, value);
+   }
+ 
+@@ -958,12 +983,34 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
    uint32_t frontbuffer_height = reader->ReadAndSwap<uint32_t>();
    reader->AdvanceRead((count - 4) * sizeof(uint32_t));
  
-+  if (REXCVAR_GET(vsync)) {
-+    // One swap per vblank tick, matching hardware flip timing. Blocking the
-+    // CP here paces the guest through ring-buffer backpressure.
-+    std::unique_lock<std::mutex> lock(vblank_mutex_);
-+    uint32_t tick = vblank_counter_.load(std::memory_order_relaxed);
-+    if (tick == last_swap_vblank_tick_) {
-+      vblank_cv_.wait_for(lock, std::chrono::milliseconds(50), [this, tick] {
-+        return vblank_counter_.load(std::memory_order_relaxed) != tick;
-+      });
-+    }
-+    last_swap_vblank_tick_ = vblank_counter_.load(std::memory_order_relaxed);
-+  }
-+
-+  // Frame rate limiter. With vsync off the guest would otherwise run
-+  // uncapped (game logic is frame-paced, so it runs too fast); on
-+  // high-refresh displays this also keeps vsync-on pacing at a sane rate.
-+  // Sleeping here paces the guest through ring-buffer backpressure, the same
-+  // mechanism the vsync path uses.
-+  const int32_t frame_limit = REXCVAR_GET(frame_limit);
-+  if (frame_limit > 0) {
-+    using FrameClock = std::chrono::steady_clock;
-+    const auto min_frame_time =
-+        std::chrono::microseconds(1000000 / frame_limit);
-+    const auto now = FrameClock::now();
-+    if (last_swap_time_ != FrameClock::time_point{}) {
-+      const auto earliest_next_swap = last_swap_time_ + min_frame_time;
-+      if (earliest_next_swap > now) {
-+        std::this_thread::sleep_until(earliest_next_swap);
-+      }
-+    }
-+    last_swap_time_ = FrameClock::now();
-+  }
++  // The frame rate limiter runs on the guest thread in VdSwap
++  // (GraphicsSystem::OnGuestSwap), before the title samples input for its next
++  // frame. Pacing here, after the frame was already simulated, only queued
++  // stale frames in the ring buffer and added a frame of input latency.
 +
    IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
  
    ++counter_;
-+  swap_counter_.fetch_add(1, std::memory_order_relaxed);
++  {
++    std::lock_guard<std::mutex> lock(swap_mutex_);
++    swap_counter_.fetch_add(1, std::memory_order_release);
++  }
++  swap_cv_.notify_all();
    return true;
  }
  
-@@ -1206,7 +1254,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
++bool CommandProcessor::WaitForSwapCount(uint32_t target, std::chrono::microseconds timeout) {
++  auto reached = [this, target] {
++    return int32_t(swap_counter_.load(std::memory_order_acquire) - target) >= 0 ||
++           !worker_running_;
++  };
++  if (reached()) {
++    return true;
++  }
++  std::unique_lock<std::mutex> lock(swap_mutex_);
++  return swap_cv_.wait_for(lock, timeout, reached);
++}
++
+ bool CommandProcessor::ExecutePacketType3_INDIRECT_BUFFER(memory::RingBuffer* reader,
+                                                           uint32_t packet, uint32_t count) {
+   // indirect buffer dispatch
+@@ -990,6 +1037,7 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+   bool is_memory = (wait_info & 0x10) != 0;
+ 
+   bool matched = false;
++  uint32_t wait_polls = 0;
+   do {
+     uint32_t value = 0;
+     if (is_memory) {
+@@ -1033,11 +1081,14 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+       // Wait.
+       if (wait >= 0x100) {
+         PrepareForWait();
+-        if (!REXCVAR_GET(vsync)) {
+-          // User wants it fast and dangerous.
++        // Short waits (fences the CPU is about to write) resolve within
++        // microseconds: yield for the first polls, then back off to 100 us
++        // sleeps. This used to depend on vsync: whole-millisecond sleeps with
++        // vsync on (latency on every fence), a hot spin with it off.
++        if (wait_polls++ < 64) {
+           rex::thread::MaybeYield();
+         } else {
+-          rex::thread::Sleep(std::chrono::milliseconds(wait / 0x100));
++          std::this_thread::sleep_for(std::chrono::microseconds(100));
+         }
+         rex::thread::SyncMemory();
+         ReturnFromWait();
+@@ -1206,7 +1257,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
    uint32_t data_value;
    if ((initiator >> 31) & 0x1) {
      // Write counter (GPU vblank counter?).
@@ -1183,7 +1797,7 @@ index a744375..09f04be 100644
    } else {
      // Write value.
      data_value = value;
-@@ -1282,6 +1330,86 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* re
+@@ -1282,6 +1333,86 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* re
    return true;
  }
  
@@ -1270,6 +1884,18 @@ index a744375..09f04be 100644
  bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32_t packet,
                                                const char* opcode_name, uint32_t viz_query_condition,
                                                uint32_t count_remaining) {
+@@ -1380,7 +1511,10 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
+           xenos::IsMajorModeExplicit(vgt_draw_initiator.major_mode, vgt_draw_initiator.prim_type);
+       draw_succeeded = IssueDraw(vgt_draw_initiator.prim_type, vgt_draw_initiator.num_indices,
+                                  is_indexed ? &index_buffer_info : nullptr, major_mode_explicit);
+-      if (!draw_succeeded) {
++      static std::atomic<uint64_t> failed_draw_reports{0};
++      const uint64_t failed_n =
++          draw_succeeded ? 0 : failed_draw_reports.fetch_add(1, std::memory_order_relaxed);
++      if (!draw_succeeded && (failed_n < 16 || (failed_n & (failed_n - 1)) == 0)) {
+         auto vgt_output_path_cntl = register_file_->Get<reg::VGT_OUTPUT_PATH_CNTL>();
+         auto vgt_hos_cntl = register_file_->Get<reg::VGT_HOS_CNTL>();
+         auto rb_modecontrol = register_file_->Get<reg::RB_MODECONTROL>();
 diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
 index 19874a5..f8ec76e 100644
 --- a/src/graphics/d3d12/command_processor.cpp
@@ -2388,10 +3014,27 @@ index 2be0e8e..2f583c7 100644
      unsupported_format_features_used_[uint32_t(format)] |=
          is_signed ? kUnsupportedSnormBit : kUnsupportedUnormBit;
 diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
-index 8f2fcb0..7953dfd 100644
+index 8f2fcb0..e422797 100644
 --- a/src/graphics/graphics_system.cpp
 +++ b/src/graphics/graphics_system.cpp
-@@ -39,6 +39,11 @@ REXCVAR_DEFINE_BOOL(store_shaders, true, "GPU",
+@@ -17,7 +17,9 @@
+ #include <functional>
+ #include <memory>
+ #include <mutex>
++#include <thread>
+ #include <utility>
++#include <chrono>
+ 
+ #include <rex/cvar.h>
+ #include <rex/graphics/command_processor.h>
+@@ -33,14 +35,59 @@
+ 
+ REXCVAR_DEFINE_STRING(swap_post_effect, "none", "GPU", "Swap post effect: none, fxaa, fxaa_extreme")
+     .allowed({"none", "fxaa", "fxaa_extreme"})
+-    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ 
+ REXCVAR_DEFINE_BOOL(store_shaders, true, "GPU",
                      "Store shaders persistently and load them when loading games to avoid "
                      "runtime spikes and freezes when playing the game not for the first time.");
  
@@ -2400,10 +3043,65 @@ index 8f2fcb0..7953dfd 100644
 +                      "Diagnostic-only: does not change VdQueryVideoMode or MarkVblank.")
 +    .range(0.0, 240.0);
 +
++REXCVAR_DEFINE_INT32(gpu_max_frames_ahead, 1, "GPU",
++                     "How many frames the game may simulate ahead of the GPU thread "
++                     "(0 = unbounded). 1 = lowest input latency; 2 = smoother on slow GPUs.")
++    .range(0, 8)
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
++REXCVAR_DEFINE_DOUBLE(perf_log_interval, 0.0, "Diagnostics",
++                      "Seconds between frame pacing log lines (0 = off).")
++    .range(0.0, 3600.0)
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
++REXCVAR_DECLARE(int32_t, frame_limit);
++
++REXCVAR_DEFINE_BOOL(guest_vblank_fast, true, "GPU",
++                    "Fire the guest vblank interrupt at 1 kHz instead of the video mode "
++                    "refresh rate. Titles that wait on vblank inside Present (this one) "
++                    "are otherwise capped at the guest refresh rate; pacing is done by "
++                    "frame_limit on the guest thread instead.")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
  namespace {
  
++// Sleeps until `deadline` with sub-100us precision: a coarse OS sleep that
++// stops short of the deadline, then yields for the remainder. A plain
++// sleep_until overshoots by the timer slack (50us+ on Linux, ~1ms on
++// Windows without high-resolution timers), which shows up as pacing jitter.
++void PreciseSleepUntil(std::chrono::steady_clock::time_point deadline) {
++  using namespace std::chrono;
++#if REX_PLATFORM_WIN32
++  constexpr auto kSpinWindow = microseconds(1500);
++#else
++  constexpr auto kSpinWindow = microseconds(300);
++#endif
++  auto now = steady_clock::now();
++  if (deadline - now > kSpinWindow) {
++    std::this_thread::sleep_until(deadline - kSpinWindow);
++  }
++  while (steady_clock::now() < deadline) {
++    std::this_thread::yield();
++  }
++}
++
  rex::graphics::CommandProcessor::SwapPostEffect ParseSwapPostEffect(
-@@ -153,6 +158,10 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
+     const std::string& effect_name) {
+   std::string lowered = effect_name;
+@@ -136,6 +183,12 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
+     return X_STATUS_UNSUCCESSFUL;
+   }
+   command_processor_->SetDesiredSwapPostEffect(ParseSwapPostEffect(REXCVAR_GET(swap_post_effect)));
++  rex::cvar::RegisterChangeCallback("swap_post_effect", [this](std::string_view, std::string_view) {
++    if (command_processor_) {
++      command_processor_->SetDesiredSwapPostEffect(
++          ParseSwapPostEffect(REXCVAR_GET(swap_post_effect)));
++    }
++  });
+ 
+   // Register GPU MMIO handlers
+   // GPU registers are at 0x7FC80000-0x7FCFFFFF
+@@ -153,6 +206,10 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
          system::X_VIDEO_MODE video_mode;
          kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
          double refresh_rate_hz = std::max(1.0, double(float(video_mode.refresh_rate)));
@@ -2414,7 +3112,17 @@ index 8f2fcb0..7953dfd 100644
          uint64_t guest_tick_frequency = chrono::Clock::guest_tick_frequency();
          uint64_t vsync_interval_ticks =
              std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
-@@ -166,7 +175,11 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
+@@ -160,13 +217,20 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
+         uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
+         while (vsync_worker_running_) {
+           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
++          // Guest vblank cadence. Host vsync no longer changes it (it only
++          // selects the host present mode); guest_vblank_fast emulates a
++          // 1 kHz vblank for titles that block on vblank inside Present.
+           uint64_t interval_ticks =
+-              REXCVAR_GET(vsync) ? vsync_interval_ticks : no_vsync_interval_ticks;
++              REXCVAR_GET(guest_vblank_fast) ? no_vsync_interval_ticks : vsync_interval_ticks;
+           while (current_time - last_frame_time >= interval_ticks) {
              MarkVblank();
              last_frame_time += interval_ticks;
            }
@@ -2427,6 +3135,139 @@ index 8f2fcb0..7953dfd 100644
          }
          return 0;
        }));
+@@ -178,7 +242,132 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
+   return X_STATUS_SUCCESS;
+ }
+ 
++void GraphicsSystem::OnGuestSwap() {
++  using Clock = std::chrono::steady_clock;
++  using namespace std::chrono;
++  auto& p = pacing_;
++  const uint32_t issued = ++p.guest_swaps;
++  const auto t_enter = Clock::now();
++
++  // 1. Bound how far the game runs ahead of the GPU thread. Swap #issued was
++  // just written but not yet kicked, so waiting for swap #(issued - N) lets
++  // the GPU thread work on at most N frames while the game builds the next.
++  double gpu_wait_ms = 0.0;
++  const int32_t max_ahead = REXCVAR_GET(gpu_max_frames_ahead);
++  if (max_ahead > 0 && command_processor_ && issued > uint32_t(max_ahead)) {
++    const uint32_t target = issued - uint32_t(max_ahead);
++    if (!command_processor_->WaitForSwapCount(target, milliseconds(100)) &&
++        !p.ahead_wait_timed_out_logged) {
++      p.ahead_wait_timed_out_logged = true;
++      REXGPU_WARN("gpu_max_frames_ahead: GPU thread did not reach swap {} within 100 ms "
++                  "(executed {}); continuing", target, command_processor_->swap_counter());
++    }
++    gpu_wait_ms = duration<double, std::milli>(Clock::now() - t_enter).count();
++  }
++
++  // 2. Frame limiter, deadline based so sleep error does not accumulate.
++  double limiter_ms = 0.0;
++  const int32_t limit = REXCVAR_GET(frame_limit);
++  if (limit > 0) {
++    const auto period = duration_cast<Clock::duration>(duration<double>(1.0 / limit));
++    auto now = Clock::now();
++    if (p.next_deadline == Clock::time_point{} || now - p.next_deadline > period * 2 ||
++        p.next_deadline - now > period * 2) {
++      // First frame, a hitch, or a limit change: restart the cadence.
++      p.next_deadline = now;
++    } else if (p.next_deadline > now) {
++      PreciseSleepUntil(p.next_deadline);
++      limiter_ms = duration<double, std::milli>(Clock::now() - now).count();
++    }
++    p.next_deadline += period;
++  } else {
++    p.next_deadline = {};
++  }
++
++  // 3. Overlay pause: park the guest on a finished frame.
++  bool was_held = false;
++  {
++    std::unique_lock<std::mutex> lock(frame_hold_mutex_);
++    while (frame_hold_ && vsync_worker_running_) {
++      was_held = true;
++      frame_hold_cv_.wait_for(lock, milliseconds(50));
++    }
++  }
++  if (was_held) {
++    // Restart pacing and statistics so the pause is not counted as a frame.
++    p.next_deadline = {};
++    p.last_swap = {};
++  }
++
++  // 4. Statistics.
++  const auto t_exit = Clock::now();
++  if (p.last_swap != Clock::time_point{}) {
++    const double frame_ms = duration<double, std::milli>(t_exit - p.last_swap).count();
++    p.window_frames++;
++    p.window_frame_ms_sum += frame_ms;
++    p.window_frame_ms_max = std::max(p.window_frame_ms_max, frame_ms);
++    p.window_gpu_wait_ms += gpu_wait_ms;
++    p.window_limiter_ms += limiter_ms;
++  } else {
++    p.window_start = t_exit;
++    p.last_perf_log = t_exit;
++  }
++  p.last_swap = t_exit;
++
++  const double window_s = duration<double>(t_exit - p.window_start).count();
++  if (window_s >= 0.5 && p.window_frames) {
++    system::GuestFrameStats st;
++    const double n = double(p.window_frames);
++    st.fps = n / window_s;
++    st.frame_ms = p.window_frame_ms_sum / n;
++    st.frame_max_ms = p.window_frame_ms_max;
++    st.gpu_wait_ms = p.window_gpu_wait_ms / n;
++    st.limiter_ms = p.window_limiter_ms / n;
++    st.work_ms = std::max(0.0, st.frame_ms - st.gpu_wait_ms - st.limiter_ms);
++    st.frame_count = issued;
++    {
++      std::lock_guard<std::mutex> lock(pacing_stats_mutex_);
++      pacing_stats_ = st;
++    }
++    const double log_interval = REXCVAR_GET(perf_log_interval);
++    if (log_interval > 0.0 &&
++        duration<double>(t_exit - p.last_perf_log).count() >= log_interval) {
++      p.last_perf_log = t_exit;
++      REXGPU_INFO("perf: fps={:.1f} frame={:.2f}ms max={:.2f}ms work={:.2f}ms "
++                  "gpu_wait={:.2f}ms limiter={:.2f}ms gpu_lag={} limit={} ahead={}",
++                  st.fps, st.frame_ms, st.frame_max_ms, st.work_ms, st.gpu_wait_ms,
++                  st.limiter_ms,
++                  command_processor_ ? issued - command_processor_->swap_counter() : 0, limit,
++                  max_ahead);
++    }
++    p.window_start = t_exit;
++    p.window_frames = 0;
++    p.window_frame_ms_sum = 0.0;
++    p.window_frame_ms_max = 0.0;
++    p.window_gpu_wait_ms = 0.0;
++    p.window_limiter_ms = 0.0;
++  }
++}
++
++void GraphicsSystem::SetGuestFrameHold(bool hold) {
++  {
++    std::lock_guard<std::mutex> lock(frame_hold_mutex_);
++    frame_hold_ = hold;
++  }
++  frame_hold_cv_.notify_all();
++}
++
++bool GraphicsSystem::GetGuestFrameStats(system::GuestFrameStats* out) const {
++  if (!out) {
++    return false;
++  }
++  std::lock_guard<std::mutex> lock(pacing_stats_mutex_);
++  *out = pacing_stats_;
++  return true;
++}
++
+ void GraphicsSystem::Shutdown() {
++  SetGuestFrameHold(false);
+   if (command_processor_) {
+     command_processor_->Shutdown();
+     command_processor_.reset();
 diff --git a/src/graphics/pipeline/shader/dxbc_translator.cpp b/src/graphics/pipeline/shader/dxbc_translator.cpp
 index 2c31a0e..9f4a2ae 100644
 --- a/src/graphics/pipeline/shader/dxbc_translator.cpp
@@ -2512,6 +3353,61 @@ index a7d508a..c3a15ea 100644
  #include <rex/graphics/flags.h>
  #include <rex/graphics/pipeline/render_target/cache.h>
  #include <rex/graphics/pipeline/shader/dxbc_translator.h>
+diff --git a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
+index 9ce3bb4..34e6a59 100644
+--- a/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
++++ b/src/graphics/pipeline/shader/spirv_translator_fetch.cpp
+@@ -1409,8 +1409,7 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+             builder_->createUnaryOp(spv::OpLogicalNot, type_bool_, is_all_signed);
+ 
+         // Load the fetch constant word 4, needed unconditionally for LOD
+-        // biasing, for result exponent biasing, and conditionally for stacked
+-        // texture filtering.
++        // biasing, and conditionally for stacked texture filtering.
+         id_vector_temp_.clear();
+         id_vector_temp_.push_back(const_int_0_);
+         id_vector_temp_.push_back(
+@@ -1424,6 +1423,27 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+         spv::Id fetch_constant_word_4_signed =
+             builder_->createUnaryOp(spv::OpBitcast, type_int_, fetch_constant_word_4);
+ 
++        // LC-PATCH (house): load the fetch constant word 3, which holds the
++        // result exponent adjustment (exp_adjust, bits 13:18). The stock code
++        // extracted the exponent bias from word 4 bits 13:18 instead - those
++        // bits overlap the LOD bias field (word 4 bits 12:21), so any texture
++        // with a non-zero LOD bias had its sampled values scaled by
++        // 2^(lod-bias bits) (e.g. LOD bias +0.5 -> x2^8), blowing out
++        // materials while UE3 animated LOD bias during texture streaming
++        // fades. Upstream Xenia reads exp_adjust from word 3.
++        id_vector_temp_.clear();
++        id_vector_temp_.push_back(const_int_0_);
++        id_vector_temp_.push_back(
++            builder_->makeIntConstant(int((fetch_constant_word_0_index + 3) >> 2)));
++        id_vector_temp_.push_back(
++            builder_->makeIntConstant(int((fetch_constant_word_0_index + 3) & 3)));
++        spv::Id fetch_constant_word_3 = builder_->createLoad(
++            builder_->createAccessChain(spv::StorageClassUniform, uniform_fetch_constants_,
++                                        id_vector_temp_),
++            spv::NoPrecision);
++        spv::Id fetch_constant_word_3_signed =
++            builder_->createUnaryOp(spv::OpBitcast, type_int_, fetch_constant_word_3);
++
+         // Accumulate the explicit LOD (or LOD bias) sources (in D3D11.3
+         // specification order: specified LOD + sampler LOD bias + instruction
+         // LOD bias).
+@@ -2030,10 +2050,10 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+         }
+ 
+         // Apply the exponent bias from the bits 13:18 of the fetch constant
+-        // word 4.
++        // word 3. (LC-PATCH: was word 4 - see the word 3 load above.)
+         spv::Id result_exponent_bias = builder_->createBinBuiltinCall(
+             type_float_, ext_inst_glsl_std_450_, GLSLstd450Ldexp, const_float_1_,
+-            builder_->createTriOp(spv::OpBitFieldSExtract, type_int_, fetch_constant_word_4_signed,
++            builder_->createTriOp(spv::OpBitFieldSExtract, type_int_, fetch_constant_word_3_signed,
+                                   builder_->makeUintConstant(13), builder_->makeUintConstant(6)));
+         {
+           uint32_t result_remaining_components = used_result_nonzero_components;
 diff --git a/src/graphics/pipeline/texture/cache.cpp b/src/graphics/pipeline/texture/cache.cpp
 index 76f5600..0d0a8c2 100644
 --- a/src/graphics/pipeline/texture/cache.cpp
@@ -2889,7 +3785,7 @@ index ec0df7c..78a020a 100644
                                                      uint32_t length_allocations) {
    assert_always(
 diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
-index 001f36b..19e7170 100644
+index 001f36b..1e2c43d 100644
 --- a/src/graphics/vulkan/command_processor.cpp
 +++ b/src/graphics/vulkan/command_processor.cpp
 @@ -2306,8 +2306,6 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
@@ -2927,7 +3823,35 @@ index 001f36b..19e7170 100644
  
    presenter->RefreshGuestOutput(
        guest_output_width, guest_output_height, display_width, display_height,
-@@ -4027,6 +4031,10 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+@@ -3997,12 +4001,21 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+           if (REXCVAR_GET(gpu_allow_invalid_fetch_constants)) {
+             break;
+           }
+-          REXGPU_WARN(
+-              "Vertex fetch constant {} ({:08X} {:08X}) has \"invalid\" type! "
+-              "This "
+-              "is incorrect behavior, but you can try bypassing this by "
+-              "launching Xenia with --gpu_allow_invalid_fetch_constants=true.",
+-              vfetch_index, vfetch_constant.dword_0, vfetch_constant.dword_1);
++          {
++            // Some titles ('Splosion Man) issue draws with an unset fetch
++            // constant every frame; the draw is correctly dropped, but
++            // logging each one cost ~100 lines/s on the GPU thread.
++            static std::atomic<uint64_t> invalid_fetch_reports{0};
++            const uint64_t n = invalid_fetch_reports.fetch_add(1, std::memory_order_relaxed);
++            if (n < 16 || (n & (n - 1)) == 0) {
++              REXGPU_WARN(
++                  "Vertex fetch constant {} ({:08X} {:08X}) has \"invalid\" type! "
++                  "This is incorrect behavior, but you can try bypassing this by "
++                  "launching with --gpu_allow_invalid_fetch_constants=true. "
++                  "(occurrence {}, further ones are sampled)",
++                  vfetch_index, vfetch_constant.dword_0, vfetch_constant.dword_1, n + 1);
++            }
++          }
+           return false;
+         default:
+           REXGPU_WARN("Vertex fetch constant {} ({:08X} {:08X}) is completely invalid!",
+@@ -4027,6 +4040,10 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
      }
    }
  
@@ -3269,7 +4193,7 @@ index 91ac08f..79a787f 100644
  }
  
 diff --git a/src/input/input_system.cpp b/src/input/input_system.cpp
-index 813bb1c..85ad284 100644
+index 813bb1c..0caf4af 100644
 --- a/src/input/input_system.cpp
 +++ b/src/input/input_system.cpp
 @@ -79,6 +79,7 @@ void InputSystem::SetDeviceAssignment(std::unique_ptr<DeviceAssignment> assignme
@@ -3296,15 +4220,86 @@ index 813bb1c..85ad284 100644
    SCOPE_profile_cpu_f("hid");
    if (!assignment_) {
      return X_ERROR_DEVICE_NOT_CONNECTED;
-@@ -252,6 +255,7 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+@@ -242,6 +245,45 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+     }
+   }
+ 
++  if (!any) {
++    return X_ERROR_DEVICE_NOT_CONNECTED;
++  }
++  if (state_filter_) {
++    state_filter_(user_index, merged);
++  }
++  if (out_state) {
++    *out_state = merged;
++  }
++  return X_ERROR_SUCCESS;
++}
++
++X_RESULT InputSystem::GetPhysicalPadState(uint32_t user_index, X_INPUT_STATE* out_state) {
++  std::lock_guard<std::recursive_mutex> lock(mutex_);
++  if (!assignment_) {
++    return X_ERROR_DEVICE_NOT_CONNECTED;
++  }
++  RefreshDevices();
++  std::vector<DeviceId> ids;
++  assignment_->DevicesForUser(user_index, ids);
++  X_INPUT_STATE merged = {};
++  bool any = false;
++  for (DeviceId id : ids) {
++    auto* driver = DriverForDevice(id);
++    const DeviceInfo* info = DeviceInfoFor(id);
++    if (!driver || !info || info->synthetic) {
++      continue;
++    }
++    X_INPUT_STATE state = {};
++    if (driver->GetDeviceState(id, &state) != X_ERROR_SUCCESS) {
++      continue;
++    }
++    if (!any) {
++      merged = state;
++      any = true;
++    } else {
++      MergeInto(merged, state);
++    }
++  }
+   if (!any) {
+     return X_ERROR_DEVICE_NOT_CONNECTED;
+   }
+@@ -251,7 +293,18 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
+   return X_ERROR_SUCCESS;
  }
  
++void InputSystem::SetStateFilter(StateFilter filter) {
++  std::lock_guard<std::recursive_mutex> lock(mutex_);
++  state_filter_ = std::move(filter);
++}
++
++void InputSystem::SetVibrationFilter(VibrationFilter filter) {
++  std::lock_guard<std::recursive_mutex> lock(mutex_);
++  vibration_filter_ = std::move(filter);
++}
++
  X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration) {
 +  std::lock_guard<std::recursive_mutex> lock(mutex_);
    SCOPE_profile_cpu_f("hid");
    if (!assignment_) {
      return X_ERROR_DEVICE_NOT_CONNECTED;
-@@ -294,6 +298,7 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
+@@ -261,6 +314,13 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
+   std::vector<DeviceId> ids;
+   assignment_->DevicesForUser(user_index, ids);
+ 
++  X_INPUT_VIBRATION filtered_vibration;
++  if (vibration && vibration_filter_) {
++    filtered_vibration = *vibration;
++    vibration_filter_(user_index, filtered_vibration);
++    vibration = &filtered_vibration;
++  }
++
+   // Every pad on this user belongs to the same player, so all of them buzz.
+   // Only pads decide the result: synthetic devices accept any vibration and
+   // would otherwise report success for a pad that never rumbled.
+@@ -294,6 +354,7 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
  
  X_RESULT InputSystem::GetKeystroke(uint32_t user_index, uint32_t flags,
                                     X_INPUT_KEYSTROKE* out_keystroke) {
@@ -3571,7 +4566,7 @@ index 3f1a852..a6e6ed7 100644
          io_status_block->status = result;
          io_status_block->information = bytes_read;
 diff --git a/src/kernel/xboxkrnl/xboxkrnl_video.cpp b/src/kernel/xboxkrnl/xboxkrnl_video.cpp
-index 1254710..3308c40 100644
+index 1254710..3619f1d 100644
 --- a/src/kernel/xboxkrnl/xboxkrnl_video.cpp
 +++ b/src/kernel/xboxkrnl/xboxkrnl_video.cpp
 @@ -481,6 +481,24 @@ void VdSwap_entry(mapped_void buffer_ptr,      // ptr into primary ringbuffer
@@ -3599,6 +4594,17 @@ index 1254710..3308c40 100644
    assert_true(texture_format == rex::graphics::xenos::TextureFormat::k_8_8_8_8 ||
                texture_format == rex::graphics::xenos::TextureFormat::k_2_10_10_10_AS_16_16_16_16);
    assert_true(color_space == 0);  // RGB(0)
+@@ -518,6 +536,10 @@ void VdSwap_entry(mapped_void buffer_ptr,      // ptr into primary ringbuffer
+   for (uint32_t i = offset; i < 64; i++) {
+     dwords[i] = xenos::MakePacketType2();
+   }
++
++  if (auto* graphics_system = REX_KERNEL_STATE()->emulator()->graphics_system()) {
++    graphics_system->OnGuestSwap();
++  }
+ }
+ 
+ void RegisterVideoExports(rex::runtime::ExportResolver* export_resolver,
 diff --git a/src/system/function_dispatcher.cpp b/src/system/function_dispatcher.cpp
 index bd43109..7b2e466 100644
 --- a/src/system/function_dispatcher.cpp
@@ -4247,11 +5253,38 @@ index 9822f3b..ec8aaa3 100644
  };
  
  VirtualKey ParseVirtualKey(std::string_view name) {
+diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
+index 7360ed9..90207ae 100644
+--- a/src/ui/presenter.cpp
++++ b/src/ui/presenter.cpp
+@@ -713,6 +713,10 @@ void Presenter::SetGuestOutputPaintConfigFromUIThread(const GuestOutputPaintConf
+   }
+ }
+ 
++void Presenter::ReloadGuestOutputPaintConfigFromCVarsFromUIThread() {
++  SetGuestOutputPaintConfigFromUIThread(BuildGuestOutputPaintConfigFromCVar());
++}
++
+ void Presenter::AddUIDrawerFromUIThread(UIDrawer* drawer, size_t z_order) {
+   assert_not_null(drawer);
+   // Obtain whether the iterator list was empty before erasing in case of
 diff --git a/src/ui/vulkan/vulkan_presenter.cpp b/src/ui/vulkan/vulkan_presenter.cpp
-index 23645ef..110e310 100644
+index 23645ef..0527c4c 100644
 --- a/src/ui/vulkan/vulkan_presenter.cpp
 +++ b/src/ui/vulkan/vulkan_presenter.cpp
-@@ -1381,21 +1381,36 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
+@@ -49,6 +49,11 @@
+ REXCVAR_DEFINE_BOOL(present_render_pass_clear, true, "UI/Presenter",
+                     "Clear render pass during presentation");
+ 
++REXCVAR_DEFINE_BOOL(vsync_low_latency, true, "GPU",
++                    "With vsync on, present in mailbox mode when available: no tearing and "
++                    "no display-queue latency (frames beyond the refresh rate are dropped). "
++                    "Off = classic FIFO vsync.");
++
+ REXCVAR_DEFINE_BOOL(vulkan_allow_present_mode_immediate, true, "UI/Vulkan",
+                     "Allow immediate present mode (no vsync)");
+ 
+@@ -1381,21 +1386,42 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
    // interfering with GPU command processing, and also to allow tearing so
    // variable refresh rate may be used where it's available.
    // Note: If the priorities here are changes, update the cvar descriptions.
@@ -4263,9 +5296,15 @@ index 23645ef..110e310 100644
 +           present_modes.cend();
 +  };
 +  if (REXCVAR_QUERY(bool, vsync)) {
-+    // Vsync requested: FIFO paces presents to the display and applies
-+    // backpressure to the paint loop once the queue is full.
-+    if (has_present_mode(VK_PRESENT_MODE_FIFO_KHR)) {
++    // Vsync requested. Low-latency vsync prefers MAILBOX: no tearing, but the
++    // newest frame replaces a queued one instead of waiting behind it, and
++    // vkQueuePresentKHR never blocks the GPU thread on the display. FIFO
++    // paces presents to the display and applies backpressure to the paint
++    // loop once the queue is full (up to a few frames of extra latency).
++    if (REXCVAR_GET(vsync_low_latency) && REXCVAR_GET(vulkan_allow_present_mode_mailbox) &&
++        has_present_mode(VK_PRESENT_MODE_MAILBOX_KHR)) {
++      swapchain_create_info.presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
++    } else if (has_present_mode(VK_PRESENT_MODE_FIFO_KHR)) {
 +      swapchain_create_info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
 +    } else if (REXCVAR_GET(vulkan_allow_present_mode_fifo_relaxed) &&
 +               has_present_mode(VK_PRESENT_MODE_FIFO_RELAXED_KHR)) {
@@ -4295,3 +5334,56 @@ index 23645ef..110e310 100644
      // Limiting the frame rate, but lets too long frames cause tearing not to
      // make the latency even worse.
      swapchain_create_info.presentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+@@ -1403,6 +1429,12 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
+     // Highest latency (but always guaranteed to be available).
+     swapchain_create_info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+   }
++  REXLOG_INFO("VulkanPresenter: present mode {}",
++              swapchain_create_info.presentMode == VK_PRESENT_MODE_MAILBOX_KHR     ? "mailbox"
++              : swapchain_create_info.presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate"
++              : swapchain_create_info.presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR
++                  ? "fifo_relaxed"
++                  : "fifo");
+   swapchain_create_info.clipped = VK_TRUE;
+   swapchain_create_info.oldSwapchain = old_swapchain;
+   VkSwapchainKHR swapchain;
+diff --git a/thirdparty/disruptorplus/include/disruptorplus/blocking_wait_strategy.hpp b/thirdparty/disruptorplus/include/disruptorplus/blocking_wait_strategy.hpp
+index 32d427d..1cb1dfe 100644
+--- a/thirdparty/disruptorplus/include/disruptorplus/blocking_wait_strategy.hpp
++++ b/thirdparty/disruptorplus/include/disruptorplus/blocking_wait_strategy.hpp
+@@ -116,13 +116,15 @@ namespace disruptorplus
+             sequence_t result;
+             {
+                 std::unique_lock<std::mutex> lock(m_mutex);
++                // (lock, time, predicate): the upstream header had the
++                // predicate and time swapped, which does not compile.
+                 m_cv.wait_for(
+                     lock,
++                    timeout,
+                     [&]() -> bool {
+                         result = minimum_sequence_after(sequence, count, sequences);
+                         return difference(result, sequence) >= 0;
+-                    },
+-                    timeout);
++                    });
+             }
+             return result;
+         }
+@@ -169,13 +171,15 @@ namespace disruptorplus
+             sequence_t result;
+             {
+                 std::unique_lock<std::mutex> lock(m_mutex);
++                // (lock, time, predicate): the upstream header had the
++                // predicate and time swapped, which does not compile.
+                 m_cv.wait_until(
+                     lock,
++                    timeoutTime,
+                     [&]() -> bool {
+                         result = minimum_sequence_after(sequence, count, sequences);
+                         return difference(result, sequence) >= 0;
+-                    },
+-                    timeoutTime);
++                    });
+             }
+             return result;
+         }

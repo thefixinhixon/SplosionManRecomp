@@ -178,11 +178,15 @@ MainWindow::MainWindow(QWidget *parent)
                                  "runtime default. More can reduce load-time hitching "
                                  "on many-core CPUs."));
     addSettingRow(graphics, QStringLiteral("VSync"), vsyncCheck_,
-                  QStringLiteral("Match frame output to your display's refresh. On: no "
-                                 "tearing, slightly more input lag. Off: fastest, may tear."));
+                  QStringLiteral("On: no tearing, using low-latency (mailbox) presentation "
+                                 "where the driver supports it, so it adds almost no input "
+                                 "lag. Off: may tear. More modes are in the in-game menu "
+                                 "(F1, or click both sticks)."));
     addSettingRow(graphics, QStringLiteral("Frame limit"), frameLimitSpin_,
-                  QStringLiteral("Cap the frame rate. 0 = unlimited. Matching your "
-                                 "monitor's refresh (e.g. 75) is a good middle ground."));
+                  QStringLiteral("Cap the frame rate. 0 = unlimited. The game runs at the "
+                                 "correct speed at any frame rate; matching your monitor's "
+                                 "refresh (e.g. 144) is the smoothest. Can also be changed "
+                                 "live in the in-game menu (F1)."));
     addSettingRow(graphics, QStringLiteral("Windowed"), windowedCheck_,
                   QStringLiteral("Run fullscreen or in a window."));
     pageLayout->addWidget(graphicsBox);

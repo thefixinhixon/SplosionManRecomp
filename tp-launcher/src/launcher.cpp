@@ -168,9 +168,16 @@ LaunchPlan buildLaunchPlan(const GameProfile &profile,
     args << QStringLiteral("--resolution_scale=") +
             QString::number(settings.resolutionScale);
     args << QStringLiteral("--swap_post_effect=") + settings.swapPostEffect;
-    if (settings.anisotropic != 0)
-        args << QStringLiteral("--anisotropic_override=") +
-                QString::number(settings.anisotropic);
+    // The runtime's anisotropic_override is an enum, not a multiplier:
+    // -1 = no override (game's own), 1 = 1x, 2 = 2x, 3 = 4x, 4 = 8x,
+    // 5 = 16x; anything else is silently ignored. The UI shows
+    // multipliers (0 = game default), so map them - passing "16" raw
+    // used to switch the override off entirely.
+    {
+        const int x = settings.anisotropic;
+        const int level = x <= 0 ? -1 : x >= 16 ? 5 : x >= 8 ? 4 : x >= 4 ? 3 : x >= 2 ? 2 : 1;
+        args << QStringLiteral("--anisotropic_override=") + QString::number(level);
+    }
     args << QStringLiteral("--native_2x_msaa=") + boolValue(settings.native2xMsaa);
     args << QStringLiteral("--async_shader_compilation=") +
             boolValue(settings.asyncShaderCompilation);

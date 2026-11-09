@@ -26,7 +26,9 @@
 #        committed generated/ tree compiles as-is. (Earlier
 #        stamp tricks lost to ninja freshness races -- the
 #        freshly linked rexglue.exe always re-armed the rule.)
-#   [B2] The SDK version check (rex_resolve_version in the SDK) hard-
+#   [B2] RESOLVED in patches/house-sdk.patch: the SDK now resolves its
+#        version from its own tree. Historical note follows.
+#        The SDK version check (rex_resolve_version in the SDK) hard-
 #        fails when the game repo carries a release tag that reads
 #        "ahead" of the SDK floor — hit locally with this repo's v1.3
 #        tag (local workaround: park .git during configure/build). The
