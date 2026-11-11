@@ -43,10 +43,24 @@ index af35fa8..0ab179e 100644
      "Root of the fetched FidelityFX SDK source tree")
  
 diff --git a/include/rex/cvar.h b/include/rex/cvar.h
-index fe94186..7531fea 100644
+index fe94186..f71460e 100644
 --- a/include/rex/cvar.h
 +++ b/include/rex/cvar.h
-@@ -190,6 +190,12 @@ std::optional<size_t> RegisterFlag(FlagEntry entry);
+@@ -119,7 +119,13 @@ namespace rex::cvar {
+ // Initialization API
+ //=============================================================================
+ 
++// Applies --flags from the command line and returns the positional arguments.
++// A bad argument is skipped (and reported), never the whole command line.
+ std::vector<std::string> Init(int argc, char** argv);
++
++// Problems Init() found on the command line (bad values, missing values,
++// repeated flags), for the app to log once logging is up. Clears the list.
++std::vector<std::string> TakeCommandLineWarnings();
+ void LoadConfig(const std::filesystem::path& config_path);
+ void ApplyEnvironment();
+ void FinalizeInit();
+@@ -190,6 +196,12 @@ std::optional<size_t> RegisterFlag(FlagEntry entry);
  void UnregisterFlag(std::string_view name);
  
  bool SetFlagByName(std::string_view name, std::string_view value);
@@ -1334,18 +1348,98 @@ index fdecb6f..ea847f4 100644
 +
  }  // namespace rex::codegen
 diff --git a/src/core/cvar.cpp b/src/core/cvar.cpp
-index 228728d..6822d3b 100644
+index 228728d..84f9b57 100644
 --- a/src/core/cvar.cpp
 +++ b/src/core/cvar.cpp
-@@ -60,6 +60,7 @@ std::unordered_map<std::string, size_t>& GetRegistryIndex() {
+@@ -16,8 +16,7 @@
+ #include <optional>
+ #include <string_view>
+ #include <unordered_map>
+-
+-#include <CLI/CLI.hpp>
++#include <utility>
+ 
+ #include <rex/cvar.h>
+ #include <rex/logging.h>
+@@ -59,7 +58,9 @@ std::unordered_map<std::string, size_t>& GetRegistryIndex() {
+ // modules register cvars long after Init/LoadConfig.
  struct PendingValues {
    std::optional<std::string> cmdline;
++  bool cmdline_bare = false;  // "--name" without a value (cmdline holds "true")
    std::optional<std::string> config;
 +  std::optional<std::string> runtime;  // SetFlagByNameOrDefer before registration
  };
  
  std::unordered_map<std::string, PendingValues>& GetPendingValuesStorage() {
-@@ -229,7 +230,28 @@ std::optional<size_t> RegisterFlag(FlagEntry entry) {
+@@ -93,6 +94,67 @@ bool ApplyFromSource(FlagEntry& entry, std::string_view value, Source source) {
+   return true;
+ }
+ 
++// Command-line problems (bad values, missing values, repeated flags). Init runs
++// before logging exists and a Windows GUI exe has no visible stderr, so they are
++// kept until the app takes them once logging is up (TakeCommandLineWarnings);
++// later ones (flags registered after that, by runtime-loaded modules) are
++// logged directly.
++std::vector<std::string>& GetCommandLineWarningsStorage() {
++  static std::vector<std::string> warnings;
++  return warnings;
++}
++bool g_command_line_warnings_taken = false;
++
++void WarnCommandLine(std::string message) {
++  if (g_command_line_warnings_taken) {
++    REXLOG_WARN("Command line: {}", message);
++    return;
++  }
++  fprintf(stderr, "cvar: %s\n", message.c_str());
++  GetCommandLineWarningsStorage().push_back(std::move(message));
++}
++
++// Strict, unlike the Boolean setter (which reads anything unknown as false),
++// so a typo is reported instead of silently turning a flag off.
++std::optional<bool> ParseCommandLineBool(std::string_view value) {
++  std::string lower(value);
++  std::transform(lower.begin(), lower.end(), lower.begin(),
++                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
++  if (lower == "true" || lower == "1" || lower == "yes" || lower == "on") {
++    return true;
++  }
++  if (lower == "false" || lower == "0" || lower == "no" || lower == "off") {
++    return false;
++  }
++  return std::nullopt;
++}
++
++// Applies one command-line value to a registered flag, at Init or when a flag
++// registers later. A bad value is reported and skipped; it never affects other
++// flags. `bare`: given as "--name" with no value.
++void ApplyCommandLineValue(FlagEntry& entry, std::string_view value, bool bare) {
++  std::string applied(value);
++  if (entry.type == FlagType::Boolean) {
++    auto parsed = bare ? std::optional<bool>(true) : ParseCommandLineBool(value);
++    if (!parsed) {
++      WarnCommandLine("ignored --" + entry.name + "=" + applied + ": expected true or false");
++      return;
++    }
++    applied = *parsed ? "true" : "false";
++  } else if (bare) {
++    WarnCommandLine("ignored --" + entry.name + ": it needs a value (--" + entry.name + "=...)");
++    return;
++  }
++  if (!Outranks(Source::kCommandLine, entry)) {
++    return;
++  }
++  if (!entry.setter(applied)) {
++    WarnCommandLine("ignored --" + entry.name + "=" + applied + ": invalid value");
++    return;
++  }
++  entry.source = Source::kCommandLine;
++}
++
+ // Recursively apply TOML values
+ void ApplyTomlTable(const toml::table& table, const std::string& prefix) {
+   for (const auto& [key, value] : table) {
+@@ -229,7 +291,28 @@ std::optional<size_t> RegisterFlag(FlagEntry entry) {
    auto& storage = GetRegistryStorage();
    auto it = index.find(entry.name);
    if (it != index.end()) {
@@ -1375,17 +1469,20 @@ index 228728d..6822d3b 100644
      return std::nullopt;
    }
    size_t pos = storage.size();
-@@ -252,6 +274,9 @@ std::optional<size_t> RegisterFlag(FlagEntry entry) {
+@@ -250,7 +333,11 @@ std::optional<size_t> RegisterFlag(FlagEntry entry) {
+     }
+     if (pending_it != pending.end()) {
        if (pending_it->second.cmdline) {
-         ApplyFromSource(stored, *pending_it->second.cmdline, Source::kCommandLine);
-       }
+-        ApplyFromSource(stored, *pending_it->second.cmdline, Source::kCommandLine);
++        ApplyCommandLineValue(stored, *pending_it->second.cmdline,
++                              pending_it->second.cmdline_bare);
++      }
 +      if (pending_it->second.runtime) {
 +        ApplyFromSource(stored, *pending_it->second.runtime, Source::kRuntime);
-+      }
+       }
        pending.erase(pending_it);
      }
-   }
-@@ -343,6 +368,27 @@ bool SetFlagByName(std::string_view name, std::string_view value) {
+@@ -343,6 +430,27 @@ bool SetFlagByName(std::string_view name, std::string_view value) {
    return SetFlagFromSource(name, value, Source::kRuntime) == ApplyResult::kApplied;
  }
  
@@ -1412,6 +1509,158 @@ index 228728d..6822d3b 100644
 +
  bool SetFlagFromCommandLine(std::string_view name, std::string_view value) {
    return SetFlagFromSource(name, value, Source::kCommandLine) != ApplyResult::kRejected;
+ }
+@@ -579,63 +687,99 @@ void UnregisterChangeCallbacks(std::string_view name) {
+ // Initialization
+ //=============================================================================
+ 
++
++// Each argument is handled on its own: a bad one is reported and skipped and
++// the rest still apply. (This used CLI11, whose parse is all or nothing: one
++// rejected argument - a repeated flag, a bad bool - threw, and every flag on the
++// command line was dropped, including --game_data_root.)
++//
++// Forms: --name=value; --name value (registered non-bool flags only); --name and
++// --no-name for bools; "--" ends the options. Anything else is positional. A
++// repeated flag is reported and the last one wins. Unregistered names are kept
++// for cvars that register later (runtime-loaded modules): --name=value,
++// --name (true), --no-name (false); a separated "--name value" is ambiguous
++// with a positional for those, so it is never consumed.
+ std::vector<std::string> Init(int argc, char** argv) {
+-  CLI::App app{"", ""};
+-  app.allow_extras();
++  std::lock_guard lock(GetRegistryMutex());
++  auto& registry = GetRegistryStorage();
++  auto& index = GetRegistryIndex();
++  std::vector<std::string> positional;
++  std::unordered_map<std::string, int> seen;
++  bool options_ended = false;
+ 
+-  for (auto& entry : GetRegistryStorage()) {
+-    if (entry.type == FlagType::Boolean) {
+-      app.add_flag_function(
+-          "--" + entry.name + ",!--no-" + entry.name,
+-          [&entry](int64_t count) {
+-            ApplyFromSource(entry, count > 0 ? "true" : "false", Source::kCommandLine);
+-          },
+-          entry.description);
++  for (int i = 1; i < argc; ++i) {
++    std::string_view arg = argv[i] ? argv[i] : "";
++    if (options_ended || !arg.starts_with("--")) {
++      positional.emplace_back(arg);
++      continue;
++    }
++    if (arg == "--") {
++      options_ended = true;
++      continue;
++    }
++    arg.remove_prefix(2);
++    std::string name;
++    std::optional<std::string> value;
++    if (auto eq = arg.find('='); eq != std::string_view::npos) {
++      name.assign(arg.substr(0, eq));
++      value.emplace(arg.substr(eq + 1));
+     } else {
+-      app.add_option_function<std::string>(
+-          "--" + entry.name,
+-          [&entry](const std::string& val) { ApplyFromSource(entry, val, Source::kCommandLine); },
+-          entry.description);
++      name.assign(arg);
++    }
++    if (name.empty()) {
++      WarnCommandLine("ignored '" + std::string(argv[i]) + "': no flag name");
++      continue;
+     }
+-  }
+ 
+-  try {
+-    app.parse(argc, argv);
+-  } catch (const CLI::ParseError& e) {
+-    // TODO(tomc): dumb workaround for the stupid chicken and its egg.
+-    //             dont call rex logging funcs here for now.
+-    fprintf(stderr, "cvar: CLI11  parse error: %s\n", e.what());
+-  }
++    auto it = index.find(name);
++    if (it == index.end() && !value && name.starts_with("no-")) {
++      if (auto negated = index.find(name.substr(3));
++          negated != index.end() && registry[negated->second].type == FlagType::Boolean) {
++        it = negated;
++        name.erase(0, 3);
++        value = "false";
++      }
++    }
+ 
+-  // Stash unrecognized --options for cvars that register later. Supported
+-  // forms: --name=value, --name (true), --no-name (false); a separated
+-  // "--name value" pair is ambiguous with a positional, so never consumed.
+-  std::vector<std::string> positional;
+-  for (const auto& arg : app.remaining()) {
+-    std::string_view view(arg);
+-    if (!view.starts_with("--")) {
+-      positional.push_back(arg);
++    bool bare = false;
++    if (it == index.end() && !value) {
++      if (name.starts_with("no-")) {
++        name.erase(0, 3);
++        value = "false";
++      } else {
++        value = "true";
++        bare = true;
++      }
++    }
++
++    if (++seen[name] == 2) {
++      WarnCommandLine("--" + name + " is given more than once; the last one is used");
++    }
++
++    if (it == index.end()) {
++      auto& pending = GetPendingValuesStorage()[name];
++      pending.cmdline = std::move(*value);
++      pending.cmdline_bare = bare;
+       continue;
+     }
+-    view.remove_prefix(2);
+-    std::string name;
+-    std::string value = "true";
+-    if (auto eq = view.find('='); eq != std::string_view::npos) {
+-      name.assign(view.substr(0, eq));
+-      value.assign(view.substr(eq + 1));
+-    } else if (view.starts_with("no-")) {
+-      name.assign(view.substr(3));
+-      value = "false";
+-    } else {
+-      name.assign(view);
++
++    FlagEntry& entry = registry[it->second];
++    if (!value && entry.type != FlagType::Boolean && i + 1 < argc && argv[i + 1] &&
++        !std::string_view(argv[i + 1]).starts_with("--")) {
++      value = argv[++i];  // --name value
+     }
+-    std::lock_guard lock(GetRegistryMutex());
+-    GetPendingValuesStorage()[name].cmdline = std::move(value);
++    ApplyCommandLineValue(entry, value.value_or(""), !value);
+   }
+   g_init_done = true;
+   return positional;
+ }
+ 
++std::vector<std::string> TakeCommandLineWarnings() {
++  std::lock_guard lock(GetRegistryMutex());
++  g_command_line_warnings_taken = true;
++  return std::exchange(GetCommandLineWarningsStorage(), {});
++}
++
+ void LoadConfig(const std::filesystem::path& config_path) {
+   if (!std::filesystem::exists(config_path)) {
+     REXLOG_DEBUG("Config file not found: {}", config_path.string());
+@@ -725,6 +869,8 @@ void ResetAllForTesting() {
+   ResetAllToDefaults();
+   ClearPendingRestartFlags();
+   GetPendingValuesStorage().clear();
++  GetCommandLineWarningsStorage().clear();
++  g_command_line_warnings_taken = false;
+   g_init_done = false;
+   g_finalized = false;
  }
 diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
 index b52bf39..cd1014e 100644
@@ -5494,6 +5743,22 @@ index 7360ed9..90207ae 100644
  void Presenter::AddUIDrawerFromUIThread(UIDrawer* drawer, size_t z_order) {
    assert_not_null(drawer);
    // Obtain whether the iterator list was empty before erasing in case of
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index b94fe9e..b6b57d7 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -174,6 +174,11 @@ bool ReXApp::SetupEnvironment() {
+   rex::InitLogging(log_config);
+   rex::RegisterLogLevelCallback();
+ 
++  // Command-line problems cvar::Init skipped (it runs before logging exists).
++  for (const auto& warning : rex::cvar::TakeCommandLineWarnings()) {
++    REXLOG_WARN("Command line: {}", warning);
++  }
++
+   log_sink_ = std::make_shared<rex::LogCaptureSink>();
+   rex::AddSink(log_sink_);
+ 
 diff --git a/src/ui/vulkan/vulkan_presenter.cpp b/src/ui/vulkan/vulkan_presenter.cpp
 index 23645ef..0527c4c 100644
 --- a/src/ui/vulkan/vulkan_presenter.cpp
@@ -5573,6 +5838,172 @@ index 23645ef..0527c4c 100644
    swapchain_create_info.clipped = VK_TRUE;
    swapchain_create_info.oldSwapchain = old_swapchain;
    VkSwapchainKHR swapchain;
+diff --git a/tests/unit/core/cvar_test.cpp b/tests/unit/core/cvar_test.cpp
+index 03a12cb..b3e2891 100644
+--- a/tests/unit/core/cvar_test.cpp
++++ b/tests/unit/core/cvar_test.cpp
+@@ -6,9 +6,12 @@
+  * @license     BSD 3-Clause License
+  */
+ 
++#include <charconv>
+ #include <cstdlib>
+ #include <filesystem>
+ #include <fstream>
++#include <string>
++#include <vector>
+ 
+ #include <catch2/catch_approx.hpp>
+ #include <catch2/catch_test_macros.hpp>
+@@ -752,3 +755,148 @@ TEST_CASE("cvar InvokeCommand dispatches commands", "[cvar]") {
+     CHECK_FALSE(rex::cvar::InvokeCommand("does_not_exist", ""));
+   }
+ }
++
++namespace {
++
++// Runs cvar::Init on a list of arguments (argv[0] is added).
++std::vector<std::string> InitWith(std::vector<std::string> args) {
++  args.insert(args.begin(), "cvar_test");
++  std::vector<char*> argv;
++  for (auto& arg : args) {
++    argv.push_back(arg.data());
++  }
++  return rex::cvar::Init(static_cast<int>(argv.size()), argv.data());
++}
++
++}  // namespace
++
++TEST_CASE("cvar command line: a bad argument does not drop the others", "[cvar]") {
++  rex::cvar::testing::ResetAllForTesting();
++
++  SECTION("invalid value") {
++    InitWith({"--test_int32_flag=abc", "--test_string_flag=kept"});
++    CHECK(REXCVAR_GET(test_int32_flag) == 42);
++    CHECK(REXCVAR_GET(test_string_flag) == "kept");
++    CHECK(rex::cvar::TakeCommandLineWarnings().size() == 1);
++  }
++
++  SECTION("repeated flag: the last one wins") {
++    InitWith({"--test_int32_flag=1", "--test_string_flag=kept", "--test_int32_flag=2"});
++    CHECK(REXCVAR_GET(test_int32_flag) == 2);
++    CHECK(REXCVAR_GET(test_string_flag) == "kept");
++    CHECK(rex::cvar::TakeCommandLineWarnings().size() == 1);
++  }
++
++  SECTION("bad bool value") {
++    InitWith({"--test_bool_flag=maybe", "--test_string_flag=kept"});
++    CHECK(REXCVAR_GET(test_bool_flag) == false);
++    CHECK(REXCVAR_GET(test_string_flag) == "kept");
++    CHECK(rex::cvar::TakeCommandLineWarnings().size() == 1);
++  }
++
++  SECTION("missing value") {
++    InitWith({"--test_string_flag=kept", "--test_int32_flag"});
++    CHECK(REXCVAR_GET(test_int32_flag) == 42);
++    CHECK(REXCVAR_GET(test_string_flag) == "kept");
++    CHECK(rex::cvar::TakeCommandLineWarnings().size() == 1);
++  }
++
++  SECTION("warnings are taken once") {
++    InitWith({"--test_int32_flag=abc"});
++    CHECK(rex::cvar::TakeCommandLineWarnings().size() == 1);
++    CHECK(rex::cvar::TakeCommandLineWarnings().empty());
++  }
++
++  rex::cvar::testing::ResetAllForTesting();
++}
++
++TEST_CASE("cvar command line forms", "[cvar]") {
++  rex::cvar::testing::ResetAllForTesting();
++
++  SECTION("bool flags") {
++    InitWith({"--test_bool_flag"});
++    CHECK(REXCVAR_GET(test_bool_flag) == true);
++    InitWith({"--no-test_bool_flag"});
++    CHECK(REXCVAR_GET(test_bool_flag) == false);
++    InitWith({"--test_bool_flag=on"});
++    CHECK(REXCVAR_GET(test_bool_flag) == true);
++    InitWith({"--test_bool_flag=0"});
++    CHECK(REXCVAR_GET(test_bool_flag) == false);
++    CHECK(rex::cvar::TakeCommandLineWarnings().empty());
++  }
++
++  SECTION("separated value, positionals and --") {
++    auto positional = InitWith({"first", "--test_string_flag", "with space", "--test_int32_flag=7",
++                                "--", "--test_int32_flag=9"});
++    CHECK(REXCVAR_GET(test_string_flag) == "with space");
++    CHECK(REXCVAR_GET(test_int32_flag) == 7);
++    REQUIRE(positional.size() == 2);
++    CHECK(positional[0] == "first");
++    CHECK(positional[1] == "--test_int32_flag=9");
++    CHECK(rex::cvar::TakeCommandLineWarnings().empty());
++  }
++
++  SECTION("values that look like paths or contain '='") {
++    InitWith({"--test_string_flag=D:/Games/PC Games/x=y"});
++    CHECK(REXCVAR_GET(test_string_flag) == "D:/Games/PC Games/x=y");
++  }
++
++  SECTION("unregistered flags reach cvars registered later") {
++    InitWith({"--test_late_cmdline_flag=F10", "--no-test_late_bool"});
++    CHECK(rex::cvar::GetPendingCommandLineValue("test_late_cmdline_flag") == "F10");
++    CHECK(rex::cvar::GetPendingCommandLineValue("test_late_bool") == "false");
++    CHECK(rex::cvar::TakeCommandLineWarnings().empty());
++  }
++
++  rex::cvar::testing::ResetAllForTesting();
++}
++
++TEST_CASE("cvar command line: flags registered after Init are checked too", "[cvar]") {
++  rex::cvar::testing::ResetAllForTesting();
++  int32_t value = 5;
++  auto registrar_entry = [&value](const char* name) {
++    return rex::cvar::FlagEntry{
++        .name = name,
++        .type = rex::cvar::FlagType::Int32,
++        .category = "Test",
++        .description = "Late registered int flag",
++        .setter =
++            [&value](std::string_view v) {
++              int32_t parsed = 0;
++              auto [ptr, ec] = std::from_chars(v.data(), v.data() + v.size(), parsed);
++              if (ec != std::errc() || ptr != v.data() + v.size()) {
++                return false;
++              }
++              value = parsed;
++              return true;
++            },
++        .getter = [&value]() { return std::to_string(value); },
++        .default_value = "5",
++    };
++  };
++
++  SECTION("valid value applies") {
++    InitWith({"--test_late_int=7"});
++    { rex::cvar::FlagRegistrar registrar(registrar_entry("test_late_int")); }
++    CHECK(value == 7);
++    CHECK(rex::cvar::TakeCommandLineWarnings().empty());
++  }
++
++  SECTION("invalid value is reported") {
++    InitWith({"--test_late_int=abc"});
++    { rex::cvar::FlagRegistrar registrar(registrar_entry("test_late_int")); }
++    CHECK(value == 5);
++    CHECK(rex::cvar::TakeCommandLineWarnings().size() == 1);
++  }
++
++  SECTION("bare flag that needs a value is reported") {
++    InitWith({"--test_late_int"});
++    { rex::cvar::FlagRegistrar registrar(registrar_entry("test_late_int")); }
++    CHECK(value == 5);
++    auto warnings = rex::cvar::TakeCommandLineWarnings();
++    REQUIRE(warnings.size() == 1);
++    CHECK(warnings[0].find("needs a value") != std::string::npos);
++  }
++
++  rex::cvar::testing::ResetAllForTesting();
++}
 diff --git a/thirdparty/disruptorplus/include/disruptorplus/blocking_wait_strategy.hpp b/thirdparty/disruptorplus/include/disruptorplus/blocking_wait_strategy.hpp
 index 32d427d..1cb1dfe 100644
 --- a/thirdparty/disruptorplus/include/disruptorplus/blocking_wait_strategy.hpp
