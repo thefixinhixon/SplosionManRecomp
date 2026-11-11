@@ -5364,10 +5364,35 @@ index 306118e..a04477d 100644
    // internally before the failure according to Jesse Natalie from the DirectX
    // Discord server.
 diff --git a/src/ui/imgui_drawer.cpp b/src/ui/imgui_drawer.cpp
-index f270f3c..b0187ea 100644
+index f270f3c..509b95e 100644
 --- a/src/ui/imgui_drawer.cpp
 +++ b/src/ui/imgui_drawer.cpp
-@@ -436,7 +436,14 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+@@ -132,6 +132,13 @@ void ImGuiDrawer::AddDialog(ImGuiDialog* dialog) {
+     }
+   }
+   dialogs_.push_back(dialog);
++  // Draw the new dialog now. When other dialogs that don't repaint
++  // continuously (achievement toast, perf overlay) already keep this drawer
++  // attached, nothing else schedules a UI paint, and if the guest is held (a
++  // pause menu) no guest frame will either: the dialog would never appear.
++  if (presenter_) {
++    presenter_->RequestUIPaintFromUIThread();
++  }
+ }
+ 
+ void ImGuiDrawer::RemoveDialog(ImGuiDialog* dialog) {
+@@ -149,6 +156,10 @@ void ImGuiDrawer::RemoveDialog(ImGuiDialog* dialog) {
+   }
+   dialogs_.erase(it);
+   DetachIfLastDialogRemoved();
++  // Same as in AddDialog: make the removal visible even if nothing else paints.
++  if (presenter_ && !dialogs_.empty()) {
++    presenter_->RequestUIPaintFromUIThread();
++  }
+ }
+ 
+ void ImGuiDrawer::Initialize() {
+@@ -436,7 +447,14 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
    // it now if needed.
    DetachIfLastDialogRemoved();
  
