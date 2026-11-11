@@ -40,8 +40,19 @@ if(REXSDK_DIR)
     )
 endif()
 
-if(TARGET imgui::imgui)
-    target_link_libraries(splosionman PRIVATE imgui::imgui)
-elseif(TARGET imgui)
-    target_link_libraries(splosionman PRIVATE imgui)
+# Dear ImGui is compiled into rexruntime (through rexui). On Windows the exe
+# must use that one copy: linking the imgui OBJECT library here as well gives
+# splosionman.exe a second ImGui with its own GImGui context that nothing ever
+# sets, so the first ImGui call from game code (startup hint, F1 options menu,
+# FPS overlay) dereferences a null context and crashes (v2.2, issue #2). With
+# WINDOWS_EXPORT_ALL_SYMBOLS on rexruntime the ImGui functions resolve through
+# its import library instead; the game only includes imgui.h (functions, no
+# data symbols), so no dllimport is needed. On Linux the dynamic linker merges
+# the two copies, so the link stays as it was there.
+if(NOT WIN32)
+    if(TARGET imgui::imgui)
+        target_link_libraries(splosionman PRIVATE imgui::imgui)
+    elseif(TARGET imgui)
+        target_link_libraries(splosionman PRIVATE imgui)
+    endif()
 endif()
