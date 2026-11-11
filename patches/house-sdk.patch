@@ -181,10 +181,18 @@ index 4d845c7..c6fb795 100644
    static constexpr uint32_t kLoadGuestYBlocksPerGroupLog2 = 5;
  
 diff --git a/include/rex/graphics/flags.h b/include/rex/graphics/flags.h
-index 2cf24c4..3c4b107 100644
+index 2cf24c4..8cc9cb1 100644
 --- a/include/rex/graphics/flags.h
 +++ b/include/rex/graphics/flags.h
-@@ -63,6 +63,9 @@ REXCVAR_DECLARE(bool, force_convert_quad_lists_to_triangle_lists);
+@@ -46,6 +46,7 @@ REXCVAR_DECLARE(bool, direct_host_resolve);
+ 
+ // GPU Textures
+ REXCVAR_DECLARE(bool, gpu_allow_invalid_fetch_constants);
++REXCVAR_DECLARE(bool, gpu_null_vertex_stream_draw);
+ REXCVAR_DECLARE(bool, gpu_3d_to_2d_texture);
+ REXCVAR_DECLARE(int32_t, anisotropic_override);
+ REXCVAR_DECLARE(int32_t, texture_cache_memory_limit_render_to_texture);
+@@ -63,6 +64,9 @@ REXCVAR_DECLARE(bool, force_convert_quad_lists_to_triangle_lists);
  REXCVAR_DECLARE(bool, force_convert_triangle_fans_to_lists);
  REXCVAR_DECLARE(int32_t, primitive_processor_cache_min_indices);
  
@@ -591,6 +599,35 @@ index 83d09f7..be3e231 100644
    // The guest output resources are protected by two submission trackers - the
    // refresher ones (for writing to them via the guest_output_resources_
    // references) and the paint one (for presenting it via the
+diff --git a/include/rex/ui/imgui_dialog.h b/include/rex/ui/imgui_dialog.h
+index a7ab6b3..c7e20fa 100644
+--- a/include/rex/ui/imgui_dialog.h
++++ b/include/rex/ui/imgui_dialog.h
+@@ -39,6 +39,12 @@ class ImGuiDialog {
+ 
+   void Draw();
+ 
++  // Whether the UI thread must keep repainting while this dialog exists (input, animation).
++  // Dialogs that only need to be redrawn with each guest frame return false, so a dialog that
++  // lives for the whole session (achievement toasts, perf overlay) doesn't make the UI thread
++  // repaint nonstop: with a mailbox swapchain that is an unthrottled present loop.
++  virtual bool WantsContinuousRepaint() { return true; }
++
+  protected:
+   ImGuiDialog(ImGuiDrawer* imgui_drawer);
+ 
+diff --git a/include/rex/ui/overlay/achievement_toast.h b/include/rex/ui/overlay/achievement_toast.h
+index 7642601..ba61b3f 100644
+--- a/include/rex/ui/overlay/achievement_toast.h
++++ b/include/rex/ui/overlay/achievement_toast.h
+@@ -34,6 +34,7 @@ class AchievementToastDialog : public AchievementNotificationDialog {
+ 
+   // Thread-safe: safe to call from any thread, including guest threads.
+   void Push(const rex::system::AchievementEvent& event) override;
++  bool WantsContinuousRepaint() override;
+ 
+  protected:
+   void OnDraw(ImGuiIO& io) override;
 diff --git a/include/rex/ui/presenter.h b/include/rex/ui/presenter.h
 index afb4a30..af58f46 100644
 --- a/include/rex/ui/presenter.h
@@ -621,6 +658,48 @@ index 68274d2..d1f7cdd 100644
  #include <atomic>
  #include <cassert>
  #include <csetjmp>
+diff --git a/resources/templates/init/rexglue_cmake.inja b/resources/templates/init/rexglue_cmake.inja
+index f39557b..1fdbd3a 100644
+--- a/resources/templates/init/rexglue_cmake.inja
++++ b/resources/templates/init/rexglue_cmake.inja
+@@ -114,17 +114,26 @@ endmacro()
+ # codegen, including one a project assembles itself rather than taking the
+ # library rexglue_setup_target() builds. The stamp comes first: the DEPFILE
+ # names it.
+-add_custom_command(
+-    OUTPUT "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/codegen.build.stamp"
+-           {{ cmake_var("REXGLUE_ENTRYPOINT_GENERATED_SOURCES") }}
+-    COMMAND $<TARGET_FILE:rex::rexglue> codegen {{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ names.snake_case }}_manifest.toml
+-    DEPFILE "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/codegen.d"
+-    WORKING_DIRECTORY {{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}
+-    COMMENT "Generating recompiled code for {{ names.snake_case }}"
+-    VERBATIM
+-)
+-add_custom_target({{ names.snake_case }}_codegen
+-    DEPENDS "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/codegen.build.stamp")
++# Codegen needs the proprietary default.xex. When it is absent (CI,
++# source-only checkouts), skip the rule entirely and compile the
++# committed generated/ tree as-is; the no-op target keeps the
++# add_dependencies() calls valid. With the XEX present (a real
++# development tree), codegen behaves exactly as upstream.
++if(EXISTS "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/assets/default.xex")
++    add_custom_command(
++        OUTPUT "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/codegen.build.stamp"
++               {{ cmake_var("REXGLUE_ENTRYPOINT_GENERATED_SOURCES") }}
++        COMMAND $<TARGET_FILE:rex::rexglue> codegen {{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ names.snake_case }}_manifest.toml
++        DEPFILE "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/codegen.d"
++        WORKING_DIRECTORY {{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}
++        COMMENT "Generating recompiled code for {{ names.snake_case }}"
++        VERBATIM
++    )
++    add_custom_target({{ names.snake_case }}_codegen
++        DEPENDS "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/codegen.build.stamp")
++else()
++    add_custom_target({{ names.snake_case }}_codegen)
++endif()
+ 
+ # Include DLL module shared library targets if codegen has generated them
+ if(EXISTS "{{ cmake_var("CMAKE_CURRENT_SOURCE_DIR") }}/{{ entrypoint_out_dir }}/dll_targets.cmake")
 diff --git a/src/audio/sdl/sdl_audio_driver.cpp b/src/audio/sdl/sdl_audio_driver.cpp
 index 20a2cd8..8b39d29 100644
 --- a/src/audio/sdl/sdl_audio_driver.cpp
@@ -3013,6 +3092,20 @@ index 2be0e8e..2f583c7 100644
    if (desc.Format == DXGI_FORMAT_UNKNOWN) {
      unsupported_format_features_used_[uint32_t(format)] |=
          is_signed ? kUnsupportedSnormBit : kUnsupportedUnormBit;
+diff --git a/src/graphics/flags.cpp b/src/graphics/flags.cpp
+index e2983a4..2991501 100644
+--- a/src/graphics/flags.cpp
++++ b/src/graphics/flags.cpp
+@@ -15,6 +15,9 @@
+ 
+ REXCVAR_DEFINE_BOOL(gpu_allow_invalid_fetch_constants, false, "GPU",
+                     "Allow invalid fetch constants");
++REXCVAR_DEFINE_BOOL(gpu_null_vertex_stream_draw, true, "GPU",
++                    "Draw with null vertex streams (invalid fetch constant at address 0) "
++                    "reading guest memory like the hardware, instead of dropping the draw");
+ REXCVAR_DEFINE_BOOL(native_2x_msaa, true, "GPU", "Enable native 2x MSAA");
+ REXCVAR_DEFINE_BOOL(depth_float24_round, false, "GPU", "Round float24 depth values");
+ REXCVAR_DEFINE_BOOL(depth_float24_convert_in_pixel_shader, false, "GPU",
 diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
 index 8f2fcb0..e422797 100644
 --- a/src/graphics/graphics_system.cpp
@@ -3409,10 +3502,18 @@ index 9ce3bb4..34e6a59 100644
          {
            uint32_t result_remaining_components = used_result_nonzero_components;
 diff --git a/src/graphics/pipeline/texture/cache.cpp b/src/graphics/pipeline/texture/cache.cpp
-index 76f5600..0d0a8c2 100644
+index 76f5600..8b949d4 100644
 --- a/src/graphics/pipeline/texture/cache.cpp
 +++ b/src/graphics/pipeline/texture/cache.cpp
-@@ -45,7 +45,7 @@ REXCVAR_DEFINE_INT32(texture_cache_memory_limit_soft_lifetime, 30, "GPU",
+@@ -9,6 +9,7 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <atomic>
+ #include <algorithm>
+ #include <cstdint>
+ #include <utility>
+@@ -45,7 +46,7 @@ REXCVAR_DEFINE_INT32(texture_cache_memory_limit_soft_lifetime, 30, "GPU",
                       "Soft texture cache memory limit lifetime (seconds)")
      .range(1, 3600);
  
@@ -3421,7 +3522,7 @@ index 76f5600..0d0a8c2 100644
                      "Sample problematic 3D textures through 2D-compatible wrappers")
      .lifecycle(rex::cvar::Lifecycle::kHotReload);
  
-@@ -366,11 +366,49 @@ uint32_t TextureCache::GuestToHostSwizzle(uint32_t guest_swizzle, uint32_t host_
+@@ -366,11 +367,49 @@ uint32_t TextureCache::GuestToHostSwizzle(uint32_t guest_swizzle, uint32_t host_
    return host_swizzle;
  }
  
@@ -3472,7 +3573,7 @@ index 76f5600..0d0a8c2 100644
      return false;
    }
  
-@@ -384,6 +422,18 @@ bool TextureCache::PrepareTextureLoad(Texture& texture, PendingTextureLoad& pend
+@@ -384,6 +423,18 @@ bool TextureCache::PrepareTextureLoad(Texture& texture, PendingTextureLoad& pend
      if (outdated_mask & Texture::kOutdatedBitMips) {
        mips_outdated = texture.mips_outdated(global_lock);
      }
@@ -3491,7 +3592,7 @@ index 76f5600..0d0a8c2 100644
    }
    if (!base_outdated && !mips_outdated) {
      return false;
-@@ -394,7 +444,6 @@ bool TextureCache::PrepareTextureLoad(Texture& texture, PendingTextureLoad& pend
+@@ -394,7 +445,6 @@ bool TextureCache::PrepareTextureLoad(Texture& texture, PendingTextureLoad& pend
    pending_load_out.load_mips = mips_outdated;
    pending_range_count_out = 0;
  
@@ -3499,7 +3600,7 @@ index 76f5600..0d0a8c2 100644
    if (base_outdated) {
      PendingSharedMemoryRange pending_range;
      pending_range.start = texture_key.base_page << 12;
-@@ -492,6 +541,7 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
+@@ -492,6 +542,7 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
      TextureBinding& binding = texture_bindings_[index];
      xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(index);
      TextureKey old_key = binding.key;
@@ -3507,7 +3608,7 @@ index 76f5600..0d0a8c2 100644
      uint8_t old_swizzled_signs = binding.swizzled_signs;
      BindingInfoFromFetchConstant(fetch, binding.key, &binding.swizzled_signs);
      texture_bindings_in_sync_ |= index_bit;
-@@ -504,16 +554,29 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
+@@ -504,16 +555,29 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
      }
      uint32_t old_host_swizzle = binding.host_swizzle;
      binding.host_swizzle = GuestToHostSwizzle(fetch.swizzle, GetHostFormatSwizzle(binding.key));
@@ -3538,7 +3639,7 @@ index 76f5600..0d0a8c2 100644
          any_sign_is_not_signed != any_sign_was_not_signed ||
          any_sign_is_signed != any_sign_was_signed) {
        bindings_changed |= index_bit;
-@@ -529,6 +592,10 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
+@@ -529,6 +593,10 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
        if (any_sign_is_not_signed) {
          if (key_changed || !any_sign_was_not_signed) {
            binding.texture = FindOrCreateTexture(binding.key);
@@ -3549,7 +3650,7 @@ index 76f5600..0d0a8c2 100644
            load_unsigned_data = true;
          }
        } else {
-@@ -539,6 +606,9 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
+@@ -539,6 +607,9 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
            TextureKey signed_key = binding.key;
            signed_key.signed_separate = 1;
            binding.texture_signed = FindOrCreateTexture(signed_key);
@@ -3559,7 +3660,7 @@ index 76f5600..0d0a8c2 100644
            load_signed_data = true;
          }
        } else {
-@@ -549,6 +619,9 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
+@@ -549,6 +620,9 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
        // be different.
        if (key_changed) {
          binding.texture = FindOrCreateTexture(binding.key);
@@ -3569,6 +3670,34 @@ index 76f5600..0d0a8c2 100644
          load_unsigned_data = true;
        }
        binding.texture_signed = nullptr;
+@@ -914,12 +988,21 @@ void TextureCache::BindingInfoFromFetchConstant(const xenos::xe_gpu_texture_fetc
+       if (REXCVAR_GET(gpu_allow_invalid_fetch_constants)) {
+         break;
+       }
+-      REXGPU_WARN(
+-          "Texture fetch constant ({:08X} {:08X} {:08X} {:08X} {:08X} {:08X}) "
+-          "has \"invalid\" type! This is incorrect behavior, but you can try "
+-          "bypassing this by launching Xenia with "
+-          "--gpu_allow_invalid_fetch_constants=true.",
+-          fetch.dword_0, fetch.dword_1, fetch.dword_2, fetch.dword_3, fetch.dword_4, fetch.dword_5);
++      {
++        // Unbound D3D texture slots (type cleared, stale descriptor) are sampled every
++        // frame by some titles (Comic Jumper); they bind the null texture. Sample the
++        // log like the vertex fetch warning so it doesn't flood the GPU thread.
++        static std::atomic<uint64_t> invalid_texture_reports{0};
++        const uint64_t n = invalid_texture_reports.fetch_add(1, std::memory_order_relaxed);
++        if (n < 16 || (n & (n - 1)) == 0) {
++          REXGPU_WARN(
++              "Texture fetch constant ({:08X} {:08X} {:08X} {:08X} {:08X} {:08X}) "
++              "has \"invalid\" type! Binding the null texture. (occurrence {}, further "
++              "ones are sampled)",
++              fetch.dword_0, fetch.dword_1, fetch.dword_2, fetch.dword_3, fetch.dword_4,
++              fetch.dword_5, n + 1);
++        }
++      }
+       return;
+     default:
+       REXGPU_WARN(
 diff --git a/src/graphics/pipeline/texture/info_formats.cpp b/src/graphics/pipeline/texture/info_formats.cpp
 index c456e1e..e97c6a0 100644
 --- a/src/graphics/pipeline/texture/info_formats.cpp
@@ -3785,7 +3914,7 @@ index ec0df7c..78a020a 100644
                                                      uint32_t length_allocations) {
    assert_always(
 diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
-index 001f36b..1e2c43d 100644
+index 001f36b..93ee2fb 100644
 --- a/src/graphics/vulkan/command_processor.cpp
 +++ b/src/graphics/vulkan/command_processor.cpp
 @@ -2306,8 +2306,6 @@ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontb
@@ -3823,7 +3952,7 @@ index 001f36b..1e2c43d 100644
  
    presenter->RefreshGuestOutput(
        guest_output_width, guest_output_height, display_width, display_height,
-@@ -3997,12 +4001,21 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+@@ -3997,12 +4001,56 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
            if (REXCVAR_GET(gpu_allow_invalid_fetch_constants)) {
              break;
            }
@@ -3833,6 +3962,41 @@ index 001f36b..1e2c43d 100644
 -              "is incorrect behavior, but you can try bypassing this by "
 -              "launching Xenia with --gpu_allow_invalid_fetch_constants=true.",
 -              vfetch_index, vfetch_constant.dword_0, vfetch_constant.dword_1);
++          if (REXCVAR_GET(gpu_null_vertex_stream_draw) && vfetch_constant.address == 0) {
++            // Null stream: D3D's SetStreamSource(n, NULL) leaves type=kInvalidVertex at
++            // address 0. Xenos vfetch doesn't check the type, and uber-shaders often only
++            // fetch such a stream behind a runtime branch ('Splosion Man, Comic Jumper),
++            // so the draw must not be dropped. The shader addresses shared memory without
++            // bounds checks, so make the range it could touch resident (unbound sparse
++            // pages are what caused VK_ERROR_DEVICE_LOST with
++            // gpu_allow_invalid_fetch_constants) and read guest memory like hardware.
++            uint32_t stride_words = 0;
++            for (const auto& binding : vertex_shader->vertex_bindings()) {
++              if (binding.fetch_constant == vfetch_index) {
++                stride_words = std::max(stride_words, binding.stride_words);
++              }
++            }
++            uint32_t max_index =
++                std::min(uint32_t(regs.Get<reg::VGT_MAX_VTX_INDX>().max_indx) +
++                             uint32_t(regs.Get<reg::VGT_INDX_OFFSET>().indx_offset),
++                         uint32_t(0xFFFF));
++            uint32_t length = std::min((max_index + 1) * std::max(stride_words, 1u) * 4 + 64,
++                                       uint32_t(4) << 20);
++            if (!shared_memory_->RequestRange(0, length)) {
++              return draw_fail("null_vertex_stream_request");
++            }
++            static std::atomic<uint64_t> null_stream_reports{0};
++            const uint64_t n = null_stream_reports.fetch_add(1, std::memory_order_relaxed);
++            if (n < 4 || (n & (n - 1)) == 0) {
++              REXGPU_INFO(
++                  "Vertex fetch constant {} is a null stream ({:08X} {:08X}); drawing with "
++                  "{} resident bytes at guest address 0 (stride {} words, occurrence {})",
++                  vfetch_index, vfetch_constant.dword_0, vfetch_constant.dword_1, length,
++                  stride_words, n + 1);
++            }
++            // Not marked in sync: the required length depends on per-draw registers.
++            continue;
++          }
 +          {
 +            // Some titles ('Splosion Man) issue draws with an unset fetch
 +            // constant every frame; the draw is correctly dropped, but
@@ -3851,7 +4015,7 @@ index 001f36b..1e2c43d 100644
            return false;
          default:
            REXGPU_WARN("Vertex fetch constant {} ({:08X} {:08X}) is completely invalid!",
-@@ -4027,6 +4040,10 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+@@ -4027,6 +4075,10 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
      }
    }
  
@@ -5199,6 +5363,26 @@ index 306118e..a04477d 100644
    // Even if presentation has failed, work might have been enqueued anyway
    // internally before the failure according to Jesse Natalie from the DirectX
    // Discord server.
+diff --git a/src/ui/imgui_drawer.cpp b/src/ui/imgui_drawer.cpp
+index f270f3c..b0187ea 100644
+--- a/src/ui/imgui_drawer.cpp
++++ b/src/ui/imgui_drawer.cpp
+@@ -436,7 +436,14 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+   // it now if needed.
+   DetachIfLastDialogRemoved();
+ 
+-  if (!dialogs_.empty()) {
++  bool wants_repaint = false;
++  for (ImGuiDialog* dialog : dialogs_) {
++    if (dialog->WantsContinuousRepaint()) {
++      wants_repaint = true;
++      break;
++    }
++  }
++  if (wants_repaint) {
+     // Repaint (and handle input) continuously if still active. In detached mode
+     // there is no presenter; the app drives repaint via its own present loop.
+     if (presenter_) {
 diff --git a/src/ui/keybinds.cpp b/src/ui/keybinds.cpp
 index 9822f3b..ec8aaa3 100644
 --- a/src/ui/keybinds.cpp
@@ -5253,6 +5437,23 @@ index 9822f3b..ec8aaa3 100644
  };
  
  VirtualKey ParseVirtualKey(std::string_view name) {
+diff --git a/src/ui/overlay/achievement_toast.cpp b/src/ui/overlay/achievement_toast.cpp
+index 53b8c0b..bf37272 100644
+--- a/src/ui/overlay/achievement_toast.cpp
++++ b/src/ui/overlay/achievement_toast.cpp
+@@ -29,6 +29,12 @@ void AchievementToastDialog::Push(const rex::system::AchievementEvent& event) {
+   queue_.push_back({event, std::chrono::steady_clock::now()});
+ }
+ 
++bool AchievementToastDialog::WantsContinuousRepaint() {
++  // Only while a toast is queued or fading; idle, guest frames redraw it.
++  std::lock_guard<std::mutex> lock(mutex_);
++  return !queue_.empty();
++}
++
+ void AchievementToastDialog::OnDraw(ImGuiIO& io) {
+   auto now = std::chrono::steady_clock::now();
+ 
 diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
 index 7360ed9..90207ae 100644
 --- a/src/ui/presenter.cpp

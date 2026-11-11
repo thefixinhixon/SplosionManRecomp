@@ -92,6 +92,8 @@ class PerfOverlay : public rex::ui::ImGuiDialog {
  public:
   PerfOverlay(rex::ui::ImGuiDrawer* drawer, MenuHost host);
   ~PerfOverlay() override;
+  // Redrawn with each guest frame; must not keep the UI thread repainting (mailbox busy loop).
+  bool WantsContinuousRepaint() override { return false; }
 
  protected:
   void OnDraw(ImGuiIO& io) override;

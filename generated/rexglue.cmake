@@ -117,7 +117,7 @@ endmacro()
 # Codegen needs the proprietary default.xex. When it is absent (CI,
 # source-only checkouts), skip the rule entirely and compile the
 # committed generated/ tree as-is; the no-op target keeps the
-# add_dependencies() calls below valid. With the XEX present (a real
+# add_dependencies() calls valid. With the XEX present (a real
 # development tree), codegen behaves exactly as upstream.
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/assets/default.xex")
     add_custom_command(
