@@ -19,8 +19,12 @@ struct GameProfile {
     QString titleId;      // Xbox 360 title id, e.g. "584108C2"
     QStringList forcedArgs; // Always passed, in order (see launcher.cpp)
     QString accent;       // Theme accent; substituted into the .qss at startup
-    QString launcherName; // Product name: window title + QSettings app name
+    QString launcherName; // Product name shown to users: window title and
+                          // application display name
     QString themeFile;    // Stylesheet resource, e.g. ":/theme/maw.qss"
+    QString settingsName; // QSettings application name: where the launcher's
+                          // settings are stored. Never change it after a
+                          // release, or users lose their settings.
 };
 
 // The Maw (Twisted Pixel, XBLA). Title id 584108C2.
@@ -44,6 +48,7 @@ inline const GameProfile &mawProfile()
         QStringLiteral("#7a4fd0"), // theme accent (drives the .qss)
         QStringLiteral("TP Maw Launcher"),
         QStringLiteral(":/theme/maw.qss"),
+        QStringLiteral("TP Maw Launcher"),
     };
     return profile;
 }
@@ -63,8 +68,10 @@ inline const GameProfile &splosionProfile()
             QStringLiteral("--license_mask=1"),
         },
         QStringLiteral("#f06414"), // hot orange (drives the .qss)
-        QStringLiteral("TP Splosionman Launcher"),
+        QStringLiteral("SplosionManRecomp"),
         QStringLiteral(":/theme/splosion.qss"),
+        // The pre-2.2.2 product name, kept as the settings key.
+        QStringLiteral("TP Splosionman Launcher"),
     };
     return profile;
 }

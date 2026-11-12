@@ -96,7 +96,7 @@ cp "$(find_one TPSplosionmanLauncher "$LAUNCHER_BUILD" -maxdepth 1)" "$STAGE/"
 ls -la "$STAGE"
 
 echo "== AppImage"
-STAGE_DIR="$STAGE" QMAKE="$QT_DIR/bin/qmake" VERSION="$VERSION" \
+STAGE_DIR="$STAGE" QMAKE="$QT_DIR/bin/qmake" VERSION="$VERSION" SDK_LICENSE="$SDK/LICENSE" \
   TOOLS_DIR="$WORK/appimage-tools" APPDIR="$WORK/AppDir" \
   OUTPUT="$WORK/SplosionMan-x86_64-$VERSION.AppImage" \
   "$ROOT/packaging/appimage/build-appimage-x86_64.sh"

@@ -4,7 +4,7 @@ project(TPHouseLauncher LANGUAGES CXX)
 # House launcher for ReXGlue recomp games. One codebase, per-game
 # builds: TP_GAME selects the compiled-in profile, theme and art.
 #   maw         (default) -> TPMawLauncher        "TP Maw Launcher"
-#   splosionman           -> TPSplosionmanLauncher "TP Splosionman Launcher"
+#   splosionman           -> TPSplosionmanLauncher "SplosionManRecomp"
 # Qt Widgets, C++20. Verified against Qt 6.4.2 (recomp-dev distrobox)
 # and Qt 6.10 (host) - stick to Qt 6.4-era APIs so it builds in both.
 

@@ -9,6 +9,8 @@
 #   TOOLS_DIR  where linuxdeploy / appimagetool are downloaded (default: <repo>/out/appimage-tools)
 #   APPDIR     scratch AppDir (default: <repo>/out/AppDir)
 #
+#   SDK_LICENSE  the ReXGlue SDK's LICENSE file, shipped in usr/share/doc (its
+#                BSD-3-Clause terms require the notice in binary releases)
 #   GLIBC_MAX    newest glibc symbol version anything shipped may need (default
 #                2.34, AlmaLinux 9 / the build container)
 #   GLIBCXX_MAX  same for libstdc++ (default 3.4.29, GCC 11)
@@ -64,6 +66,15 @@ install -d "$APPDIR/usr/bin" "$APPDIR/usr/lib"
 for f in splosionman librexruntime.so librexgpu-xenos.so TPSplosionmanLauncher; do
   install -m755 "$STAGE_DIR/$f" "$APPDIR/usr/bin/$f"
 done
+# Licenses: this project's (MIT) and the ReXGlue SDK's.
+DOC_DIR="$APPDIR/usr/share/doc/splosionmanrecomp"
+install -d "$DOC_DIR"
+install -m644 "$ROOT/LICENSE" "$DOC_DIR/LICENSE"
+if [[ -n "${SDK_LICENSE:-}" ]]; then
+  install -m644 "$SDK_LICENSE" "$DOC_DIR/LICENSE-ReXGlue-SDK"
+else
+  echo "warning: SDK_LICENSE not set; the SDK's license is not included" >&2
+fi
 # The game finds librexruntime.so next to itself; so must the GPU plugin
 # (its build RUNPATH points into the build tree).
 patchelf --set-rpath '$ORIGIN' "$APPDIR/usr/bin/splosionman" "$APPDIR/usr/bin/librexgpu-xenos.so"

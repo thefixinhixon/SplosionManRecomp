@@ -51,7 +51,7 @@ stay together in the folder — the launcher checks for them at startup.
 
 ## The launcher
 
-Both platforms ship the **TP 'Splosion Man Launcher** (Qt6, theme
+Both platforms ship the **SplosionManRecomp** launcher (Qt6, theme
 included), from the shared launcher codebase in `tp-launcher/`:
 
 - **Import XBLA package** on the Game tab — built-in STFS extraction,
@@ -177,6 +177,27 @@ Also, on either platform: a crash while the shader cache writes can
 poison it — if the game starts freezing at the intro→3D transition,
 delete the cache subfolder in the game's data folder (your saves live
 elsewhere and are safe).
+
+## License
+
+This project's own code — the launcher (`tp-launcher/`), the game glue in
+`src/`, the Android port, packaging, scripts and build files — is released
+under the [MIT License](LICENSE).
+
+Not covered by it:
+
+- **The game.** 'Splosion Man's code, data, art, audio, characters and
+  names are © Twisted Pixel Games / Microsoft. `generated/` is
+  machine-translated from the game's executable, and the launcher art
+  depicts the game's character; neither is offered under the MIT License.
+- **The ReXGlue SDK** and `patches/house-sdk.patch` (this project's
+  changes to it) are under the SDK's own BSD-3-Clause license (derived
+  from Xenia). Release packages include that license.
+- **`launcher-linux/`** is the original launcher this project's launcher
+  family started from (by MaSieS4Fun, for hells-gate-recomp). It is kept
+  for reference, is not built, and stays under its authors' terms.
+- **Third-party components** in the releases (Qt, SDL, AMD FidelityFX
+  and others) keep their own licenses.
 
 ## Credits & disclosure
 

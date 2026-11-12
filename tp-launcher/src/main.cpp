@@ -39,7 +39,11 @@ int main(int argc, char *argv[])
 
     const GameProfile &profile = activeProfile();
     QCoreApplication::setOrganizationName(QStringLiteral("HouseRecomp"));
-    QCoreApplication::setApplicationName(profile.launcherName);
+    // The settings key stays fixed (see GameProfile::settingsName); the
+    // display name is what users see, and must match the window title so
+    // Wayland/X11 don't append the settings key to it.
+    QCoreApplication::setApplicationName(profile.settingsName);
+    QGuiApplication::setApplicationDisplayName(profile.launcherName);
     // All settings go through QSettings IniFormat (see gamesettings.cpp);
     // make it the default too so any future QSettings use matches.
     QSettings::setDefaultFormat(QSettings::IniFormat);
