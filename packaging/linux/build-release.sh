@@ -71,8 +71,8 @@ echo "== Launcher"
 # libOpenGL.so present (AlmaLinux) the launcher would otherwise need
 # libOpenGL.so.0, which many systems don't install. libGL.so.1 is everywhere.
 LAUNCHER_BUILD="$WORK/build-launcher"
-cmake -S "$ROOT/tp-launcher" -B "$LAUNCHER_BUILD" -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DTP_GAME=splosionman \
+cmake -S "$ROOT/launcher" -B "$LAUNCHER_BUILD" -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DSMR_VERSION="$VERSION" \
   -DCMAKE_C_COMPILER="$LAUNCHER_CC" -DCMAKE_CXX_COMPILER="$LAUNCHER_CXX" \
   -DOpenGL_GL_PREFERENCE=LEGACY \
   -DCMAKE_PREFIX_PATH="$QT_DIR"
@@ -92,7 +92,7 @@ find_one() {
 cp "$(find_one splosionman "$GAME_BUILD" -maxdepth 1)" "$STAGE/"
 cp "$(find_one librexruntime.so "$GAME_BUILD" "$SDK/out")" "$STAGE/"
 cp "$(find_one librexgpu-xenos.so "$GAME_BUILD" "$SDK/out")" "$STAGE/"
-cp "$(find_one TPSplosionmanLauncher "$LAUNCHER_BUILD" -maxdepth 1)" "$STAGE/"
+cp "$(find_one SplosionManRecomp "$LAUNCHER_BUILD" -maxdepth 1)" "$STAGE/"
 ls -la "$STAGE"
 
 echo "== AppImage"

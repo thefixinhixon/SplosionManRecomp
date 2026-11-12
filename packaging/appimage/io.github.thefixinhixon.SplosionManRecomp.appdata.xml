@@ -12,7 +12,7 @@
   <project_license>MIT</project_license>
   <launchable type="desktop-id">io.github.thefixinhixon.SplosionManRecomp.desktop</launchable>
   <provides>
-    <binary>TPSplosionmanLauncher</binary>
+    <binary>SplosionManRecomp</binary>
   </provides>
 
   <description>
@@ -87,6 +87,11 @@
   </content_rating>
 
   <releases>
+    <release version="2.3" date="2026-11-12">
+      <description>
+        <p>A new launcher: its settings match the in-game menu, it shows art from your own game package, and it follows your light or dark desktop theme. The AppImage can now update itself with AppImageUpdate and similar tools.</p>
+      </description>
+    </release>
     <release version="2.2.2" date="2026-11-12">
       <description>
         <p>Runs on Ubuntu 22.04 and other older distros (glibc 2.34); the launcher is now called SplosionManRecomp.</p>

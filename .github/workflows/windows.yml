@@ -12,11 +12,8 @@
 #             upscaling (bit us on Linux twice: Condemned v12,
 #             'Splosion Man v2.0).
 #
-#   launcher  the TP house launcher in tp-launcher/ (this same repo —
-#             single checkout, no second source), built for 'Splosion
-#             Man with -DTP_GAME=splosionman against MSVC Qt 6.8.
-#             tp-launcher/CMakeLists.txt defaults TP_GAME=maw, so that
-#             define is load-bearing.
+#   launcher  the SplosionManRecomp launcher in launcher/ (this same
+#             repo), built against MSVC Qt 6.8.
 #
 # Open blockers flagged by the recon (fix/confirm before trusting green):
 #   [B1] Codegen must stay a no-op in CI: the XEX is proprietary
@@ -35,15 +32,9 @@
 #        game checkout therefore uses fetch-tags: false. If configure
 #        still trips the check, the fallback is deleting local tags in
 #        a step before configuring.
-#   [B3] Exact Windows file names for the runtime / GPU-plugin DLLs are
-#        unknown until the first build (Linux ships librexruntime.so +
-#        librexgpu-xenos.so). The artifact step globs *.dll beside the
-#        exe; pin exact names after run #1. Relatedly, the launcher's
-#        Windows program-set names (tp-launcher/src/platform.cpp) are
-#        placeholders pending this same first run.
-#   [B4] The launcher executable is a console-subsystem binary on
-#        Windows (add_executable in tp-launcher lacks the WIN32 flag)
-#        — cosmetic, fine for the CI milestone.
+#   [B3] RESOLVED: the Windows program set is splosionman.exe,
+#        rexruntime.dll, rexgpu-xenos.dll and amd_fidelityfx_dx12.dll
+#        (launcher/src/launch.cpp checks for exactly these).
 #
 # Sources verified publicly cloneable without credentials (2026-10-03):
 # rexglue/rexglue-sdk, rexglue/FidelityFX-SDK, this repo. FidelityFX
@@ -57,6 +48,11 @@ name: Windows build
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version shown in the launcher (e.g. v2.3); empty = commit"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -154,7 +150,7 @@ jobs:
           if-no-files-found: error
 
   launcher:
-    name: TP launcher ('Splosion Man)
+    name: Launcher (SplosionManRecomp.exe)
     runs-on: windows-latest
     steps:
       - name: Check out this repo
@@ -165,36 +161,35 @@ jobs:
         with:
           version: '6.8.*'
           arch: win64_msvc2022_64
-          # tp-launcher needs Qt6 Widgets only (CMakeLists verified).
-          # Local dev used Qt 6.4.2 (container) and 6.10.2 (host).
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Configure launcher (TP_GAME=splosionman)
+      - name: Configure launcher
         shell: pwsh
-        run: >
-          cmake -S tp-launcher -B tp-launcher/out/build/win -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DTP_GAME=splosionman
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          $version = if ($env:VERSION) { $env:VERSION } else { "build $($env:GITHUB_SHA.Substring(0, 7))" }
+          cmake -S launcher -B launcher/out/build/win -G Ninja -DCMAKE_BUILD_TYPE=Release "-DSMR_VERSION=$version"
 
       - name: Build launcher
         shell: pwsh
-        run: cmake --build tp-launcher/out/build/win
+        run: cmake --build launcher/out/build/win
 
       - name: Deploy Qt runtime next to the exe
         shell: pwsh
-        run: windeployqt tp-launcher/out/build/win/TPSplosionmanLauncher.exe
+        run: windeployqt --no-translations launcher/out/build/win/SplosionManRecomp.exe
 
       - name: Upload launcher artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tp-launcher-splosionman-windows
+          name: launcher-splosionman-windows
           path: |
-            tp-launcher/out/build/win/TPSplosionmanLauncher.exe
-            tp-launcher/out/build/win/*.dll
-            tp-launcher/out/build/win/platforms/**
-            tp-launcher/out/build/win/styles/**
-            tp-launcher/out/build/win/imageformats/**
-            tp-launcher/out/build/win/tls/**
+            launcher/out/build/win/SplosionManRecomp.exe
+            launcher/out/build/win/*.dll
+            launcher/out/build/win/platforms/**
+            launcher/out/build/win/styles/**
+            launcher/out/build/win/imageformats/**
+            launcher/out/build/win/tls/**
           if-no-files-found: error

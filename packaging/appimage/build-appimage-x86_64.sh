@@ -3,7 +3,7 @@
 #
 # Env:
 #   STAGE_DIR  folder with splosionman, librexruntime.so, librexgpu-xenos.so
-#              and TPSplosionmanLauncher (one build set: never mix files)
+#              and SplosionManRecomp (one build set: never mix files)
 #   QMAKE      qmake of the Qt the launcher was built with
 #   OUTPUT     AppImage path (default: <repo>/out/SplosionMan-x86_64-<VERSION>.AppImage)
 #   TOOLS_DIR  where linuxdeploy / appimagetool are downloaded (default: <repo>/out/appimage-tools)
@@ -11,6 +11,8 @@
 #
 #   SDK_LICENSE  the ReXGlue SDK's LICENSE file, shipped in usr/share/doc (its
 #                BSD-3-Clause terms require the notice in binary releases)
+#   UPDATE_INFO  AppImage update information (default: GitHub releases of this
+#                repo, latest release, via the .zsync file published with it)
 #   GLIBC_MAX    newest glibc symbol version anything shipped may need (default
 #                2.34, AlmaLinux 9 / the build container)
 #   GLIBCXX_MAX  same for libstdc++ (default 3.4.29, GCC 11)
@@ -33,9 +35,10 @@ TOOLS_DIR="${TOOLS_DIR:-$ROOT/out/appimage-tools}"
 APPDIR="${APPDIR:-$ROOT/out/AppDir}"
 GLIBC_MAX="${GLIBC_MAX:-2.34}"
 APP_ID=io.github.thefixinhixon.SplosionManRecomp
+UPDATE_INFO="${UPDATE_INFO:-gh-releases-zsync|thefixinhixon|SplosionManRecomp|latest|SplosionMan-x86_64-*.AppImage.zsync}"
 GLIBCXX_MAX="${GLIBCXX_MAX:-3.4.29}"
 
-for f in splosionman librexruntime.so librexgpu-xenos.so TPSplosionmanLauncher; do
+for f in splosionman librexruntime.so librexgpu-xenos.so SplosionManRecomp; do
   [[ -f "$STAGE_DIR/$f" ]] || { echo "Missing $STAGE_DIR/$f" >&2; exit 1; }
 done
 
@@ -64,7 +67,7 @@ export PATH="$TOOLS_DIR/bin:$PATH"
 
 rm -rf "$APPDIR"
 install -d "$APPDIR/usr/bin" "$APPDIR/usr/lib"
-for f in splosionman librexruntime.so librexgpu-xenos.so TPSplosionmanLauncher; do
+for f in splosionman librexruntime.so librexgpu-xenos.so SplosionManRecomp; do
   install -m755 "$STAGE_DIR/$f" "$APPDIR/usr/bin/$f"
 done
 # AppStream metadata (the AppImage catalog and software centers read it; the
@@ -100,7 +103,7 @@ export NO_STRIP=1  # linuxdeploy's bundled strip is older than our toolchain
 
 "$TOOLS_DIR/linuxdeploy/AppRun" \
   --appdir "$APPDIR" \
-  --executable "$APPDIR/usr/bin/TPSplosionmanLauncher" \
+  --executable "$APPDIR/usr/bin/SplosionManRecomp" \
   --desktop-file "$HERE/$APP_ID.desktop" \
   --icon-file "$HERE/$APP_ID.png" \
   --plugin qt
@@ -117,7 +120,7 @@ rm -f "$APPDIR"/usr/lib/libwayland-*.so*
 
 # AppRun = the launcher, as in v2.x.
 rm -f "$APPDIR/AppRun"
-ln -s usr/bin/TPSplosionmanLauncher "$APPDIR/AppRun"
+ln -s usr/bin/SplosionManRecomp "$APPDIR/AppRun"
 
 # The newest glibc / libstdc++ symbol versions what we ship requires (the
 # ELF version-needs section; same output from every binutils version).
@@ -148,5 +151,15 @@ done
 mkdir -p "$(dirname "$OUTPUT")"
 command -v appstreamcli >/dev/null ||
   echo "warning: appstreamcli not found; the AppStream metadata is not validated" >&2
-ARCH=x86_64 "$TOOLS_DIR/appimagetool/AppRun" "$APPDIR" "$OUTPUT"
+# -u embeds the update information (AppImageUpdate, Gear Lever and others
+# read it) and makes appimagetool write $OUTPUT.zsync, which must be published
+# next to the AppImage in the release.
+rm -f "$OUTPUT.zsync"
+# appimagetool writes the .zsync into the current folder, naming the AppImage
+# by file name only (the release serves both from the same place).
+OUTPUT="$(realpath -m "$OUTPUT")"
+(cd "$(dirname "$OUTPUT")" &&
+  ARCH=x86_64 "$TOOLS_DIR/appimagetool/AppRun" -u "$UPDATE_INFO" "$APPDIR" "$(basename "$OUTPUT")")
+[[ -f "$OUTPUT.zsync" ]] || { echo "appimagetool did not write $OUTPUT.zsync" >&2; exit 1; }
 echo "Created: $OUTPUT"
+echo "Created: $OUTPUT.zsync"

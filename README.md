@@ -38,11 +38,16 @@ pick an extracted game folder. Requirements:
 - Vulkan drivers for your GPU.
 - PipeWire or PulseAudio (the game needs an audio output device).
 
-### Windows — pre-release `v2.2.1`
+The AppImage carries update information: AppImageUpdate, Gear Lever,
+AppImageLauncher and similar tools can update it in place from the
+latest GitHub release (only the changed parts are downloaded).
 
-Grab `SplosionMan-Windows-v2.2.1.zip` from the pre-release. Extract it
-into a new, empty folder, run `TPSplosionmanLauncher.exe`, import your
-XBLA package on the Game tab, and press Play. Requirements: Windows
+### Windows (test build)
+
+Grab `SplosionMan-Windows-<version>.zip` from the latest release. Extract
+it into a new, empty folder, run `SplosionManRecomp.exe`
+(`TPSplosionmanLauncher.exe` up to v2.2.2), import your XBLA package, and
+press Play. Requirements: Windows
 10/11 64-bit, a GPU with DirectX 12 support (the Windows build renders
 with Direct3D 12), the Microsoft Visual C++ Redistributable (x64), and
 an audio output device. The four game program files (`splosionman.exe`,
@@ -51,19 +56,27 @@ stay together in the folder — the launcher checks for them at startup.
 
 ## The launcher
 
-Both platforms ship the **SplosionManRecomp** launcher (Qt6, theme
-included), from the shared launcher codebase in `tp-launcher/`:
+Both platforms ship the **SplosionManRecomp** launcher (Qt 6, `launcher/`),
+written for this project:
 
-- **Import XBLA package** on the Game tab — built-in STFS extraction,
-  no external tools needed
-- **23 settings, each with a plain-language explanation**: internal
-  resolution (720p→4K), **AMD FSR upscaling** (on by default), FXAA,
-  MSAA, anisotropic filtering, VSync, frame limit, audio options,
-  storage locations, and advanced Vulkan/profile options
-- Settings save automatically as you change them; Reset to Defaults
-  included
-- On Linux, the launcher also vacuums leaked guest-memory mappings
-  from crashed runs before launching
+- **Import XBLA package**: reads your package directly (built-in STFS
+  reader, no other tools) and extracts the game. Or choose a folder that
+  already holds the extracted game.
+- **The game's own art.** The launcher ships none: it shows a drawn
+  placeholder until the game data is there, then makes its banner and
+  icon from the dashboard art inside your package.
+- **Settings** are the same options as the in-game menu, with the same
+  choices and a plain-language explanation for each, plus game language,
+  detailed logging and the save folder. They save as you change them; a
+  value changed in the launcher replaces one chosen earlier in the
+  in-game menu.
+- **Light and dark**, following your desktop (on Linux through the XDG
+  portal, so it also works inside the AppImage) or set by hand.
+- **Open logs folder** for bug reports: the game writes `game.log` and the
+  launcher `last-command.txt` (the exact command) there.
+  `SplosionManRecomp --print-command` prints that command without
+  starting the game.
+- Settings from the old launcher (up to v2.2.2) carry over on first start.
 
 ## In-game options menu
 
@@ -134,7 +147,7 @@ and the game has no sound on PipeWire systems. (Ask us how we know.)
    fixes).
 3. Build the game (CMake preset `linux-amd64-release`, with
    `-DREXSDK_DIR=<sdk> -DREXGLUE_ENABLE_FIDELITYFX=ON`), the SDK runtime
-   libs, and `tp-launcher/` (CMake, `-DTP_GAME=splosionman`).
+   libs, and `launcher/` (CMake, Qt 6.5 or newer).
 4. Package with `packaging/appimage/build-appimage-x86_64.sh`.
 
 Release AppImages are built by the **Linux build** GitHub Actions workflow
@@ -155,7 +168,7 @@ different build sets — it corrupts the heap.
 Windows builds are produced by GitHub Actions
 (`.github/workflows/windows.yml`): the workflow clones the pinned
 ReXGlue SDK, applies `patches/house-sdk.patch`, builds the game with
-the `win-amd64-release` preset, and builds `tp-launcher/` against
+the `win-amd64-release` preset, and builds `launcher/` against
 Qt 6.8 (MSVC). Trigger it from the Actions tab. The same steps work
 in a local Windows checkout with Visual Studio 2022 and Qt 6.8
 installed.
@@ -180,7 +193,7 @@ elsewhere and are safe).
 
 ## License
 
-This project's own code — the launcher (`tp-launcher/`), the game glue in
+This project's own code — the launcher (`launcher/`), the game glue in
 `src/`, the Android port, packaging, scripts and build files — is released
 under the [MIT License](LICENSE).
 
@@ -188,14 +201,12 @@ Not covered by it:
 
 - **The game.** 'Splosion Man's code, data, art, audio, characters and
   names are © Twisted Pixel Games / Microsoft. `generated/` is
-  machine-translated from the game's executable, and the launcher art
-  depicts the game's character; neither is offered under the MIT License.
+  machine-translated from the game's executable and is not offered under
+  the MIT License. The launcher ships no game art; it shows art from your
+  own game data.
 - **The ReXGlue SDK** and `patches/house-sdk.patch` (this project's
   changes to it) are under the SDK's own BSD-3-Clause license (derived
   from Xenia). Release packages include that license.
-- **`launcher-linux/`** is the original launcher this project's launcher
-  family started from (by MaSieS4Fun, for hells-gate-recomp). It is kept
-  for reference, is not built, and stays under its authors' terms.
 - **Third-party components** in the releases (Qt, SDL, AMD FidelityFX
   and others) keep their own licenses.
 
@@ -203,15 +214,14 @@ Not covered by it:
 
 - ReXGlue SDK team — the recompiler and runtime that make this
   possible.
-- The original launcher was adapted from the **Linux Qt launcher
+- Launchers up to v2.2.2 were adapted from the **Linux Qt launcher
   written by MaSieS4Fun** for
   [hells-gate-recomp](https://github.com/florinp93/hells-gate-recomp),
-  Zerkiller's (florinp93's) Dante's Inferno recompilation — its
-  settings system, game-folder setup, and AppImage packaging approach
-  all started there, and the launcher lineage goes back to Zerkiller's
-  original launcher for that project. The current TP launcher grew
-  out of that lineage into a bespoke cross-platform launcher for this
-  project family. Credit where it's due: thank you both.
+  Zerkiller's (florinp93's) Dante's Inferno recompilation, whose
+  lineage goes back to Zerkiller's original launcher for that project.
+  The current launcher is a new codebase, but the idea of a friendly
+  launcher with explained settings and a built-in package import
+  started there. Credit where it's due: thank you both.
 - Twisted Pixel Games — for a game absolutely worth this much trouble.
 - This port was built by Jason Hixon with heavy AI assistance
   (Muse, by Meta) on the coding side, and tested the old-fashioned

@@ -2,7 +2,7 @@
 Type=Application
 Name=SplosionManRecomp
 Comment=Native PC port of 'Splosion Man (Xbox 360)
-Exec=TPSplosionmanLauncher
+Exec=SplosionManRecomp
 Icon=io.github.thefixinhixon.SplosionManRecomp
 Categories=Game;ActionGame;
 Keywords=platformer;recompilation;Xbox 360;

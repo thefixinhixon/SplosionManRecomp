@@ -1,0 +1,2 @@
+// Windows exe icon (rendered by SplosionManRecomp --render-icon, see README in this folder).
+IDI_ICON1 ICON "app.ico"
