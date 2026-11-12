@@ -12,6 +12,7 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -20,6 +21,7 @@
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QTabWidget>
 #include <QThread>
@@ -145,12 +147,15 @@ QWidget *MainWindow::buildPlayPage()
     auto *buttons = new QHBoxLayout();
     auto *import = new QPushButton(QStringLiteral("Import XBLA package..."), page);
     auto *choose = new QPushButton(QStringLiteral("Choose game folder..."), page);
+    auto *importDlc = new QPushButton(QStringLiteral("Import DLC..."), page);
     openLogs_ = new QPushButton(QStringLiteral("Open logs folder"), page);
     connect(import, &QPushButton::clicked, this, &MainWindow::onImport);
+    connect(importDlc, &QPushButton::clicked, this, &MainWindow::onImportDlc);
     connect(choose, &QPushButton::clicked, this, &MainWindow::onChooseFolder);
     connect(openLogs_, &QPushButton::clicked, this, &MainWindow::onOpenLogs);
     buttons->addWidget(import);
     buttons->addWidget(choose);
+    buttons->addWidget(importDlc);
     buttons->addWidget(openLogs_);
     layout->addLayout(buttons);
 
@@ -312,23 +317,19 @@ void MainWindow::refreshGame()
         statusDetail_->setText(plan.ok ? QStringLiteral("Game data: %1").arg(QDir::toNativeSeparators(dataDir))
                                        : plan.error);
     }
+    // Installed DLC, by the name each package had when it was imported.
+    QStringList dlc;
+    for (const QString &folder : gamedata::installedDlc(gamedata::saveRoot(settings_.saveRoot)))
+        dlc << opts::settingsFile()->value(QStringLiteral("dlc/") + folder, folder).toString();
+    if (!dlc.isEmpty())
+        statusDetail_->setText(statusDetail_->text() + QStringLiteral("\nDLC: ") +
+                               dlc.join(QStringLiteral(", ")));
     play_->setEnabled(!dataDir.isEmpty());
     openLogs_->setEnabled(!settings_.gameRoot.isEmpty() && !dataDir.isEmpty());
 
-    QString saves = settings_.saveRoot;
-    if (saves.isEmpty()) {
-        // The game's own default (the runtime's user folder + "splosionman").
-#if defined(Q_OS_WIN)
-        const auto base = QStandardPaths::DocumentsLocation;
-#else
-        const auto base = QStandardPaths::GenericDataLocation;
-#endif
-        const QString path =
-            QDir(QStandardPaths::writableLocation(base)).filePath(QStringLiteral("splosionman"));
-        saveFolder_->setText(QStringLiteral("Default (%1)").arg(QDir::toNativeSeparators(path)));
-    } else {
-        saveFolder_->setText(QDir::toNativeSeparators(saves));
-    }
+    const QString saves = QDir::toNativeSeparators(gamedata::saveRoot(settings_.saveRoot));
+    saveFolder_->setText(settings_.saveRoot.isEmpty() ? QStringLiteral("Default (%1)").arg(saves)
+                                                      : saves);
 }
 
 void MainWindow::setGameFolder(const QString &folder)
@@ -351,42 +352,44 @@ void MainWindow::onPlay()
                                           "folder; the game writes game.log there."));
 }
 
-void MainWindow::onImport()
+std::shared_ptr<StfsPackage> MainWindow::askForPackage(const QString &title)
 {
-    const QString packagePath = QFileDialog::getOpenFileName(
-        this, QStringLiteral("Choose your 'Splosion Man XBLA package"), QDir::homePath());
-    if (packagePath.isEmpty())
-        return;
-
+    const QString path = QFileDialog::getOpenFileName(this, title, QDir::homePath());
+    if (path.isEmpty())
+        return {};
     auto package = std::make_shared<StfsPackage>();
     QString error;
-    if (!package->open(packagePath, &error)) {
-        QMessageBox::warning(this, QStringLiteral("Import XBLA package"),
-                             QStringLiteral("This file cannot be read as an XBLA package.\n\n%1").arg(error));
-        return;
+    if (!package->open(path, &error)) {
+        QMessageBox::warning(this, title,
+                             QStringLiteral("This file cannot be read as an Xbox 360 package.\n\n%1")
+                                 .arg(error));
+        return {};
     }
-    bool hasXex = false;
-    for (const StfsPackage::Entry &entry : package->entries())
-        hasXex = hasXex || entry.path.compare(QStringLiteral("default.xex"), Qt::CaseInsensitive) == 0;
-    if (package->titleId() != gamedata::kTitleId || !hasXex) {
-        QMessageBox::warning(
-            this, QStringLiteral("Import XBLA package"),
-            QStringLiteral("This package is not the 'Splosion Man game (it is \"%1\", title ID %2%3).")
-                .arg(package->displayName(), QString::number(package->titleId(), 16).toUpper(),
-                     hasXex ? QString() : QStringLiteral(", with no default.xex")));
-        return;
+    if (package->titleId() != gamedata::kTitleId) {
+        QMessageBox::warning(this, title,
+                             QStringLiteral("This package is for another game: \"%1\" (title ID %2).")
+                                 .arg(package->displayName(),
+                                      QString::number(package->titleId(), 16).toUpper()));
+        return {};
     }
+    if (package->contentType() == kTitleUpdate) {
+        QMessageBox::information(
+            this, title,
+            QStringLiteral("\"%1\" is a title update. The game can't use title updates, and "
+                           "doesn't need them: this port includes its own fixes.")
+                .arg(package->displayName()));
+        return {};
+    }
+    return package;
+}
 
-    const QString parent = QFileDialog::getExistingDirectory(
-        this, QStringLiteral("Choose where to put the game"), suggestedImportParent());
-    if (parent.isEmpty())
-        return;
-    const QString root = QDir(parent).filePath(QStringLiteral("SplosionMan"));
-    const QString dataDir = QDir(root).filePath(QStringLiteral("gamedata"));
-
-    auto *progress = new QProgressDialog(QStringLiteral("Extracting the game..."),
+void MainWindow::extract(std::shared_ptr<StfsPackage> package, const QString &destDir,
+                         const QString &title, std::function<void()> onSuccess)
+{
+    auto *progress = new QProgressDialog(QStringLiteral("Extracting \"%1\"...")
+                                             .arg(package->displayName()),
                                          QStringLiteral("Cancel"), 0, 1000, this);
-    progress->setWindowTitle(QStringLiteral("Import XBLA package"));
+    progress->setWindowTitle(title);
     progress->setWindowModality(Qt::WindowModal);
     progress->setMinimumDuration(0);
     progress->setAutoClose(false);
@@ -399,10 +402,10 @@ void MainWindow::onImport()
     connect(progress, &QProgressDialog::canceled, this, [cancelled] { *cancelled = true; });
     const quint64 total = qMax<quint64>(1, package->totalBytes());
 
-    QThread *worker = QThread::create([package, dataDir, progress, cancelled, result, ok, total] {
+    QThread *worker = QThread::create([package, destDir, progress, cancelled, result, ok, total] {
         QString error;
         *ok = package->extractAll(
-            dataDir,
+            destDir,
             [progress, cancelled, total](quint64 done) {
                 const int value = int(done * 1000 / total);
                 QMetaObject::invokeMethod(progress, [progress, value] { progress->setValue(value); });
@@ -411,19 +414,80 @@ void MainWindow::onImport()
             &error);
         *result = error;
     });
-    connect(worker, &QThread::finished, this, [this, worker, progress, ok, result, root] {
+    connect(worker, &QThread::finished, this, [this, worker, progress, ok, result, title, onSuccess] {
         progress->close();
         progress->deleteLater();
         worker->deleteLater();
         if (!*ok) {
             if (*result != QLatin1String("Cancelled."))
-                QMessageBox::warning(this, QStringLiteral("Import XBLA package"),
+                QMessageBox::warning(this, title,
                                      QStringLiteral("The import failed.\n\n%1").arg(*result));
             return;
         }
-        setGameFolder(root);
+        onSuccess();
     });
     worker->start();
+}
+
+void MainWindow::onImport()
+{
+    const QString title = QStringLiteral("Import XBLA package");
+    auto package = askForPackage(QStringLiteral("Choose your 'Splosion Man XBLA package"));
+    if (!package)
+        return;
+    if (package->contentType() == kDownloadableContent) {
+        installDlc(package);
+        return;
+    }
+    bool hasXex = false;
+    for (const StfsPackage::Entry &entry : package->entries())
+        hasXex = hasXex || entry.path.compare(QStringLiteral("default.xex"), Qt::CaseInsensitive) == 0;
+    if (!hasXex) {
+        QMessageBox::warning(this, title,
+                             QStringLiteral("\"%1\" is not the game itself (it has no default.xex).")
+                                 .arg(package->displayName()));
+        return;
+    }
+
+    const QString parent = QFileDialog::getExistingDirectory(
+        this, QStringLiteral("Choose where to put the game"), suggestedImportParent());
+    if (parent.isEmpty())
+        return;
+    const QString root = QDir(parent).filePath(QStringLiteral("SplosionMan"));
+    extract(package, QDir(root).filePath(QStringLiteral("gamedata")), title,
+            [this, root] { setGameFolder(root); });
+}
+
+void MainWindow::onImportDlc()
+{
+    auto package = askForPackage(QStringLiteral("Choose a 'Splosion Man DLC package"));
+    if (!package)
+        return;
+    if (package->contentType() != kDownloadableContent) {
+        QMessageBox::warning(this, QStringLiteral("Import DLC"),
+                             QStringLiteral("\"%1\" is not downloadable content. To import the game "
+                                            "itself, use Import XBLA package.")
+                                 .arg(package->displayName()));
+        return;
+    }
+    installDlc(package);
+}
+
+// Downloadable content goes where the game looks for it: a folder named after
+// the package file, under <save folder>/0000000000000000/5841098F/00000002.
+void MainWindow::installDlc(std::shared_ptr<StfsPackage> package)
+{
+    const QString name = QFileInfo(package->fileName()).fileName();
+    const QString dest =
+        QDir(gamedata::dlcDir(gamedata::saveRoot(settings_.saveRoot))).filePath(name);
+    const QString displayName = package->displayName();
+    extract(package, dest, QStringLiteral("Import DLC"), [this, name, displayName] {
+        opts::settingsFile()->setValue(QStringLiteral("dlc/") + name, displayName);
+        opts::settingsFile()->sync();
+        refreshGame();
+        QMessageBox::information(this, QStringLiteral("Import DLC"),
+                                 QStringLiteral("\"%1\" is installed.").arg(displayName));
+    });
 }
 
 void MainWindow::onChooseFolder()

@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QStandardPaths>
 #include <QStringList>
 
 namespace gamedata {
@@ -87,6 +88,29 @@ QString locate(const QString &stored)
 QString logDir(const QString &gameFolder)
 {
     return QDir(gameFolder).filePath(QStringLiteral("logs"));
+}
+
+QString saveRoot(const QString &custom)
+{
+    if (!custom.isEmpty())
+        return custom;
+#if defined(Q_OS_WIN)
+    const auto base = QStandardPaths::DocumentsLocation;
+#else
+    const auto base = QStandardPaths::GenericDataLocation;
+#endif
+    return QDir(QStandardPaths::writableLocation(base)).filePath(QStringLiteral("splosionman"));
+}
+
+QString dlcDir(const QString &saveRoot)
+{
+    const QString title = QString::number(kTitleId, 16).toUpper();
+    return QDir(saveRoot).filePath(QStringLiteral("0000000000000000/%1/00000002").arg(title));
+}
+
+QStringList installedDlc(const QString &saveRoot)
+{
+    return QDir(dlcDir(saveRoot)).entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
 }
 
 } // namespace gamedata

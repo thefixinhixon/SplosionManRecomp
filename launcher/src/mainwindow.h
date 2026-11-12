@@ -7,9 +7,13 @@
 #include <QMainWindow>
 #include <QWidget>
 
+#include <functional>
+#include <memory>
+
 class QComboBox;
 class QLabel;
 class QPushButton;
+class StfsPackage;
 
 namespace theme {
 class Manager;
@@ -43,7 +47,16 @@ private:
     void setGameFolder(const QString &folder);
 
     void onPlay();
+    // XBLA package content types.
+    static constexpr quint32 kDownloadableContent = 0x00000002;
+    static constexpr quint32 kTitleUpdate = 0x000B0000;
+    std::shared_ptr<StfsPackage> askForPackage(const QString &title);
+    void extract(std::shared_ptr<StfsPackage> package, const QString &destDir,
+                 const QString &title, std::function<void()> onSuccess);
+    void installDlc(std::shared_ptr<StfsPackage> package);
+
     void onImport();
+    void onImportDlc();
     void onChooseFolder();
     void onOpenLogs();
     void onChooseSaveFolder();

@@ -67,6 +67,7 @@ bool StfsPackage::open(const QString &fileName, QString *error)
 
     const quint32 headerSize = be32(h + 0x340);
     titleId_ = be32(h + 0x360);
+    contentType_ = be32(h + 0x344);
     {
         QString name;
         for (int i = 0; i < 0x80; i += 2) {

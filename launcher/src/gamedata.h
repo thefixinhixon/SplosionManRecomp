@@ -6,6 +6,7 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 
 namespace gamedata {
 
@@ -25,5 +26,17 @@ QString locate(const QString &stored);
 
 // Where the game's log and last-command.txt go: <game folder>/logs.
 QString logDir(const QString &gameFolder);
+
+// The game's save folder: the custom one, or the game's own default
+// (Documents\splosionman on Windows, $XDG_DATA_HOME/splosionman on Linux).
+QString saveRoot(const QString &custom);
+
+// Where the game looks for downloadable content (marketplace content is
+// shared by all profiles): <save folder>/0000000000000000/5841098F/00000002.
+// Each package is a folder named after the package file.
+QString dlcDir(const QString &saveRoot);
+
+// The DLC package folders installed there.
+QStringList installedDlc(const QString &saveRoot);
 
 } // namespace gamedata

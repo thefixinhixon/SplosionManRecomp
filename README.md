@@ -62,6 +62,9 @@ written for this project:
 - **Import XBLA package**: reads your package directly (built-in STFS
   reader, no other tools) and extracts the game. Or choose a folder that
   already holds the extracted game.
+- **Import DLC**: installs a 'Splosion Man DLC package (Prologue to Ms.
+  'Splosion Man) where the game looks for downloadable content, in its save
+  folder. Title updates are not needed and are not installed.
 - **The game's own art.** The launcher ships none: it shows a drawn
   placeholder until the game data is there, then makes its banner and
   icon from the dashboard art inside your package.
