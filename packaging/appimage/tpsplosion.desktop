@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=SplosionManRecomp
-Comment=Launcher for 'Splosion Man (Twisted Pixel) Linux recompilation
-Exec=TPSplosionmanLauncher
-Icon=tpsplosion
-Categories=Game;
-Terminal=false

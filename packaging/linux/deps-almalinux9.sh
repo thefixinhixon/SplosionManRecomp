@@ -28,7 +28,7 @@ dnf config-manager --set-enabled crb
 dnf -y install --setopt=install_weak_deps=False \
   git ca-certificates findutils which file zip unzip xz binutils \
   python3 python3-pip ninja-build pkgconf-pkg-config patchelf squashfs-tools \
-  desktop-file-utils \
+  desktop-file-utils appstream \
   clang lld "gcc-toolset-$GCC_TOOLSET-gcc-c++" \
   libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXi-devel \
   libXScrnSaver-devel libXfixes-devel libXtst-devel libxcb-devel \

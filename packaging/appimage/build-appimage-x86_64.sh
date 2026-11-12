@@ -32,6 +32,7 @@ OUTPUT="${OUTPUT:-$ROOT/out/SplosionMan-x86_64-$VERSION.AppImage}"
 TOOLS_DIR="${TOOLS_DIR:-$ROOT/out/appimage-tools}"
 APPDIR="${APPDIR:-$ROOT/out/AppDir}"
 GLIBC_MAX="${GLIBC_MAX:-2.34}"
+APP_ID=io.github.thefixinhixon.SplosionManRecomp
 GLIBCXX_MAX="${GLIBCXX_MAX:-3.4.29}"
 
 for f in splosionman librexruntime.so librexgpu-xenos.so TPSplosionmanLauncher; do
@@ -66,6 +67,11 @@ install -d "$APPDIR/usr/bin" "$APPDIR/usr/lib"
 for f in splosionman librexruntime.so librexgpu-xenos.so TPSplosionmanLauncher; do
   install -m755 "$STAGE_DIR/$f" "$APPDIR/usr/bin/$f"
 done
+# AppStream metadata (the AppImage catalog and software centers read it; the
+# catalog and appimagetool only look for the *.appdata.xml name;
+# appimagetool validates it below).
+install -D -m644 "$HERE/$APP_ID.appdata.xml" "$APPDIR/usr/share/metainfo/$APP_ID.appdata.xml"
+
 # Licenses: this project's (MIT) and the ReXGlue SDK's.
 DOC_DIR="$APPDIR/usr/share/doc/splosionmanrecomp"
 install -d "$DOC_DIR"
@@ -95,8 +101,8 @@ export NO_STRIP=1  # linuxdeploy's bundled strip is older than our toolchain
 "$TOOLS_DIR/linuxdeploy/AppRun" \
   --appdir "$APPDIR" \
   --executable "$APPDIR/usr/bin/TPSplosionmanLauncher" \
-  --desktop-file "$HERE/tpsplosion.desktop" \
-  --icon-file "$HERE/tpsplosion.png" \
+  --desktop-file "$HERE/$APP_ID.desktop" \
+  --icon-file "$HERE/$APP_ID.png" \
   --plugin qt
 
 # linuxdeploy also deploys the files already in usr/bin; keep one copy of the
@@ -140,5 +146,7 @@ done
 ((fail == 0)) || { echo "shipped files need a newer system than the AppImage promises" >&2; exit 1; }
 
 mkdir -p "$(dirname "$OUTPUT")"
-ARCH=x86_64 "$TOOLS_DIR/appimagetool/AppRun" --no-appstream "$APPDIR" "$OUTPUT"
+command -v appstreamcli >/dev/null ||
+  echo "warning: appstreamcli not found; the AppStream metadata is not validated" >&2
+ARCH=x86_64 "$TOOLS_DIR/appimagetool/AppRun" "$APPDIR" "$OUTPUT"
 echo "Created: $OUTPUT"
