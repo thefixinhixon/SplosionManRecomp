@@ -375,8 +375,9 @@ std::shared_ptr<StfsPackage> MainWindow::askForPackage(const QString &title)
     if (package->contentType() == kTitleUpdate) {
         QMessageBox::information(
             this, title,
-            QStringLiteral("\"%1\" is a title update. The game can't use title updates, and "
-                           "doesn't need them: this port includes its own fixes.")
+            QStringLiteral("\"%1\" is a title update. This port doesn't use title updates and "
+                           "doesn't need them: the update mainly adds Xbox avatar features, which "
+                           "can't work on PC. DLC works without it.")
                 .arg(package->displayName()));
         return {};
     }
