@@ -12,7 +12,7 @@ recompiler — the same toolchain family as
 - **Linux: fully playable** — graphics, PipeWire audio, controller +
   vibration, full-game unlock, FSR upscaling, verified on Kubuntu
   (AMD RX 6600 / RADV).
-- **Windows: test build available** (see the `v2.2.1` pre-release) —
+- **Windows: test build available** (in the latest release) —
   built by CI, tested under Wine/Proton. Native Windows reports welcome.
 
 > **No game data is included in this repository or its releases.**
