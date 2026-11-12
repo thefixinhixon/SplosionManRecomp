@@ -51,9 +51,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: splosionman-linux-appimage
-          # Publish both in the release: the .zsync carries the update data
-          # the AppImage's embedded update information points at.
-          path: |
-            ${{ runner.temp }}/ci/*.AppImage
-            ${{ runner.temp }}/ci/*.AppImage.zsync
+          # The AppImage and its .zsync (the update data the AppImage's
+          # embedded update information points at); publish both. One glob:
+          # a second path line was dropped in this container job.
+          path: ${{ runner.temp }}/ci/SplosionMan-x86_64-*
           if-no-files-found: error
