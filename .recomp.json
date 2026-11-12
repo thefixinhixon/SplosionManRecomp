@@ -8,7 +8,7 @@
   "targets": ["Linux", "Steam Deck", "Windows", "Android"],
   "toolchain": "ReXGlue",
   "approach": "Static recompilation of the Xbox 360 binary with ReXGlue; native Linux AppImage and Windows build with a Qt launcher, in-game options menu, FSR and PipeWire audio",
-  "notes": "v2.2 released: playable on Linux; the AppImage needs only glibc 2.38, so it is built to run on the Steam Deck (SteamOS 3.7). Windows test build; Android pre-release. v2.2 adds an unlocked frame rate (the game's physics are frame-rate independent), lower input latency (guest-side frame pacing, a one-frame queue, mailbox vsync), an in-game options menu (F1 or L3+R3) for frame cap, vsync, FSR/CAS upscaling, resolution, audio and controls, an FPS overlay, and a fix for a multi-GB /dev/shm leak on Linux. A fresh recomp: no earlier recomp or port of this game existed.",
+  "notes": "v2.2 released: playable on Linux; the AppImage is built on AlmaLinux 9 and needs only glibc 2.34 (Ubuntu 22.04+, Debian 12+, Fedora 35+, RHEL 9 family, Steam Deck, Arch). Windows test build; Android pre-release. v2.2 adds an unlocked frame rate (the game's physics are frame-rate independent), lower input latency (guest-side frame pacing, a one-frame queue, mailbox vsync), an in-game options menu (F1 or L3+R3) for frame cap, vsync, FSR/CAS upscaling, resolution, audio and controls, an FPS overlay, and a fix for a multi-GB /dev/shm leak on Linux. A fresh recomp: no earlier recomp or port of this game existed.",
   "help": ["Testing the Windows build on real hardware", "Testing on a real Steam Deck"],
   "tags": ["unlocked-fps", "low-latency", "fsr"],
   "maintainers": [{ "name": "thefixinhixon", "link": "https://github.com/thefixinhixon" }],

@@ -9,6 +9,12 @@
 #   TOOLS_DIR  where linuxdeploy / appimagetool are downloaded (default: <repo>/out/appimage-tools)
 #   APPDIR     scratch AppDir (default: <repo>/out/AppDir)
 #
+#   GLIBC_MAX    newest glibc symbol version anything shipped may need (default
+#                2.34, AlmaLinux 9 / the build container)
+#   GLIBCXX_MAX  same for libstdc++ (default 3.4.29, GCC 11)
+#                The build fails above either: it means a file was built or
+#                bundled from a newer system than the AppImage promises.
+#
 # Layout (same as v2.x): everything in usr/bin, the launcher is AppRun, Qt
 # and the few non-system libraries in usr/lib. libstdc++, libc, X11, xcb and
 # Wayland client libraries come from the host (linuxdeploy's exclude list).
@@ -23,6 +29,8 @@ VERSION="${VERSION:-dev}"
 OUTPUT="${OUTPUT:-$ROOT/out/SplosionMan-x86_64-$VERSION.AppImage}"
 TOOLS_DIR="${TOOLS_DIR:-$ROOT/out/appimage-tools}"
 APPDIR="${APPDIR:-$ROOT/out/AppDir}"
+GLIBC_MAX="${GLIBC_MAX:-2.34}"
+GLIBCXX_MAX="${GLIBCXX_MAX:-3.4.29}"
 
 for f in splosionman librexruntime.so librexgpu-xenos.so TPSplosionmanLauncher; do
   [[ -f "$STAGE_DIR/$f" ]] || { echo "Missing $STAGE_DIR/$f" >&2; exit 1; }
@@ -94,10 +102,31 @@ rm -f "$APPDIR"/usr/lib/libwayland-*.so*
 rm -f "$APPDIR/AppRun"
 ln -s usr/bin/TPSplosionmanLauncher "$APPDIR/AppRun"
 
-# Report the glibc floor of what we ship.
-floor="$(find "$APPDIR/usr" -type f \( -name '*.so*' -o -perm -u+x \) -exec objdump -T {} + 2>/dev/null |
-  grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
-echo "glibc floor: ${floor:-unknown}"
+# The newest glibc / libstdc++ symbol versions what we ship requires (the
+# ELF version-needs section; same output from every binutils version).
+max_version() { # prefix, files...
+  local prefix="$1" f; shift
+  for f in "$@"; do
+    readelf -V --wide "$f" 2>/dev/null | sed -n '/Version needs section/,/^$/p'
+  done | grep -o "Name: ${prefix}_[0-9][0-9.]*" | sed "s/^Name: ${prefix}_//" | sort -uV | tail -1
+}
+newer_than() { [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" != "$2" ]]; }
+mapfile -t shipped < <(find "$APPDIR/usr" -type f \( -name '*.so*' -o -perm -u+x \) \
+  -exec sh -c 'file -b "$1" | grep -q "^ELF"' _ {} \; -print)
+fail=0
+for check in "GLIBC $GLIBC_MAX" "GLIBCXX $GLIBCXX_MAX"; do
+  set -- $check
+  floor="$(max_version "$1" "${shipped[@]}")"
+  echo "$1 floor: ${floor:-none} (limit $2)"
+  if [[ -n "$floor" ]] && newer_than "$floor" "$2"; then
+    fail=1
+    for f in "${shipped[@]}"; do
+      v="$(max_version "$1" "$f")"
+      [[ -n "$v" ]] && newer_than "$v" "$2" && echo "  needs $1_$v: ${f#"$APPDIR"/}" >&2
+    done
+  fi
+done
+((fail == 0)) || { echo "shipped files need a newer system than the AppImage promises" >&2; exit 1; }
 
 mkdir -p "$(dirname "$OUTPUT")"
 ARCH=x86_64 "$TOOLS_DIR/appimagetool/AppRun" --no-appstream "$APPDIR" "$OUTPUT"

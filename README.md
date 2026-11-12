@@ -12,9 +12,8 @@ recompiler — the same toolchain family as
 - **Linux: fully playable** — graphics, PipeWire audio, controller +
   vibration, full-game unlock, FSR upscaling, verified on Kubuntu
   (AMD RX 6600 / RADV).
-- **Windows: test build available** (see the `windows-test-1`
-  pre-release) — built by CI, verified end-to-end via Proton (levels,
-  sound, gamepad + vibration, FSR). Native Windows reports welcome.
+- **Windows: test build available** (see the `v2.2.1` pre-release) —
+  built by CI, tested under Wine/Proton. Native Windows reports welcome.
 
 > **No game data is included in this repository or its releases.**
 > You must supply your own legally obtained copy of the game — the
@@ -26,24 +25,29 @@ recompiler — the same toolchain family as
 
 ## Download
 
-### Linux — release v2.0
+### Linux
 
 Grab the AppImage (x86_64) from the latest release. `chmod +x`, run —
 the launcher imports your XBLA package on the Game tab, or lets you
-pick an extracted game folder. Requirements: a distro with
-**glibc 2.43+** (this build was produced on Ubuntu 26.04; a more
-portable build is planned), Vulkan drivers for your GPU, and PipeWire
-or PulseAudio.
+pick an extracted game folder. Requirements:
 
-### Windows — pre-release `windows-test-1`
+- **glibc 2.34 or newer**: Ubuntu 22.04+ (Mint 21+, Pop!_OS 22.04+),
+  Debian 12+, Fedora 35+, RHEL / Rocky / AlmaLinux 9+, SteamOS (Steam
+  Deck), Arch. Nothing else from your system's C/C++ libraries is newer
+  than what those ship.
+- Vulkan drivers for your GPU.
+- PipeWire or PulseAudio (the game needs an audio output device).
 
-Grab `SplosionMan-Windows-Test-v0.1.zip` from the pre-release.
-Extract the folder anywhere, run `TPSplosionmanLauncher.exe`, import
-your XBLA package on the Game tab, and press Play. Requirements:
-Windows 10/11 64-bit and a GPU with Vulkan support. The four game
-program files (`splosionman.exe`, `rexruntime.dll`, `rexgpu-xenos.dll`,
-`amd_fidelityfx_dx12.dll`) must stay together in the folder — the
-launcher checks for them at startup.
+### Windows — pre-release `v2.2.1`
+
+Grab `SplosionMan-Windows-v2.2.1.zip` from the pre-release. Extract it
+into a new, empty folder, run `TPSplosionmanLauncher.exe`, import your
+XBLA package on the Game tab, and press Play. Requirements: Windows
+10/11 64-bit, a GPU with DirectX 12 support (the Windows build renders
+with Direct3D 12), the Microsoft Visual C++ Redistributable (x64), and
+an audio output device. The four game program files (`splosionman.exe`,
+`rexruntime.dll`, `rexgpu-xenos.dll`, `amd_fidelityfx_dx12.dll`) must
+stay together in the folder — the launcher checks for them at startup.
 
 ## The launcher
 
@@ -134,10 +138,13 @@ and the game has no sound on PipeWire systems. (Ask us how we know.)
 4. Package with `packaging/appimage/build-appimage-x86_64.sh`.
 
 Release AppImages are built by the **Linux build** GitHub Actions workflow
-inside an Ubuntu 24.04 container, so they need only glibc 2.38 or newer
-(Steam Deck / SteamOS 3.7, Ubuntu 24.04+, Fedora 40+, Debian 13+, Arch).
-A build made directly on a newer distro needs that distro's glibc. To
-reproduce the release build locally with podman or docker:
+inside an AlmaLinux 9 container, so they need only glibc 2.34 and the
+system's GCC 11 libstdc++ (Ubuntu 22.04+, Debian 12+, Fedora 35+, RHEL 9
+family, Steam Deck, Arch). The C++ library pieces the SDK needs beyond
+GCC 11 come from gcc-toolset-13, which links them into each binary; the
+packaging step fails if anything shipped needs a newer glibc or
+libstdc++. A build made directly on a newer distro needs that distro's
+glibc. To reproduce the release build locally with podman or docker:
 `packaging/linux/container-build.sh` (output in `out/ci-container/`).
 
 Note: **never mix** the executable and runtime libraries from

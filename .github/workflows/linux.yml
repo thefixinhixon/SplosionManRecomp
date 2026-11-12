@@ -1,6 +1,8 @@
-# Linux AppImage build, portable: built inside ubuntu:24.04 so the binaries
-# need only glibc 2.39 (Steam Deck / SteamOS 3.7, Ubuntu 24.04+, Debian 13+,
-# Fedora 40+, Arch). The same scripts run locally with
+# Linux AppImage build, portable: built inside almalinux:9 so the AppImage
+# needs only glibc 2.34 and the system's GCC 11 libstdc++ (Ubuntu 22.04+,
+# Debian 12+, Fedora 35+, RHEL 9 family, Steam Deck, Arch). The newer C++
+# library pieces the SDK needs come from gcc-toolset-13 and are linked into
+# each binary. The same scripts run locally with
 # packaging/linux/container-build.sh.
 
 name: Linux build
@@ -18,26 +20,24 @@ permissions:
 
 jobs:
   appimage:
-    name: AppImage (x86_64, glibc 2.39)
+    name: AppImage (x86_64, glibc 2.34)
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:24.04
+      image: almalinux:9
       # The AppImage tools are run extracted; no FUSE needed.
     steps:
       - name: Install git
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates
+        run: dnf -y install git ca-certificates
 
       - name: Check out this repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Install build dependencies (clang 20, GCC 13 libstdc++, Qt 6.8)
+      - name: Install build dependencies (clang, gcc-toolset-13, CMake, Qt 6.8)
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          packaging/linux/deps-ubuntu2404.sh
+          packaging/linux/deps-almalinux9.sh
 
       - name: Build game, runtime and launcher; package the AppImage
         env:
