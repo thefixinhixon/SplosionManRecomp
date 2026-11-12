@@ -87,6 +87,11 @@
   </content_rating>
 
   <releases>
+    <release version="2.3.1" date="2026-11-12">
+      <description>
+        <p>DLC support: the launcher can import the Prologue to Ms. 'Splosion Man package, and the game now reads it instead of reporting it unreadable.</p>
+      </description>
+    </release>
     <release version="2.3" date="2026-11-12">
       <description>
         <p>A new launcher: its settings match the in-game menu, it shows art from your own game package, and it follows your light or dark desktop theme. The AppImage can now update itself with AppImageUpdate and similar tools.</p>
