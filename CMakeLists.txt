@@ -22,6 +22,7 @@ set(SPLOSIONMAN_SOURCES
     src/splosionman_app.cpp
     src/options_menu.cpp
     src/recomp_options.cpp
+    src/script_fixes.cpp
 )
 
 if(WIN32)
