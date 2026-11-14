@@ -2225,10 +2225,16 @@ index a744375..742697c 100644
          auto vgt_hos_cntl = register_file_->Get<reg::VGT_HOS_CNTL>();
          auto rb_modecontrol = register_file_->Get<reg::RB_MODECONTROL>();
 diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
-index 19874a5..f8ec76e 100644
+index 19874a5..8f6dc28 100644
 --- a/src/graphics/d3d12/command_processor.cpp
 +++ b/src/graphics/d3d12/command_processor.cpp
-@@ -14,6 +14,7 @@
+@@ -9,11 +9,13 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <atomic>
+ #include <algorithm>
+ #include <cstdarg>
  #include <cstring>
  #include <sstream>
  #include <utility>
@@ -2236,7 +2242,7 @@ index 19874a5..f8ec76e 100644
  
  #include <rex/assert.h>
  #include <rex/cvar.h>
-@@ -47,6 +48,9 @@ REXCVAR_DEFINE_BOOL(d3d12_submit_on_primary_buffer_end, true, "GPU/D3D12",
+@@ -47,6 +49,9 @@ REXCVAR_DEFINE_BOOL(d3d12_submit_on_primary_buffer_end, true, "GPU/D3D12",
                      "Submit command list when PM4 primary buffer ends")
      .lifecycle(rex::cvar::Lifecycle::kHotReload);
  
@@ -2246,7 +2252,7 @@ index 19874a5..f8ec76e 100644
  namespace rex::graphics::d3d12 {
  
  // Generated with `xb buildshaders`.
-@@ -1418,7 +1422,7 @@ bool D3D12CommandProcessor::SetupContext() {
+@@ -1418,7 +1423,7 @@ bool D3D12CommandProcessor::SetupContext() {
    *(fxaa_extreme_pipeline_.ReleaseAndGetAddressOf()) = ui::d3d12::util::CreateComputePipeline(
        device, shaders::fxaa_extreme_cs, sizeof(shaders::fxaa_extreme_cs),
        fxaa_root_signature_.Get());
@@ -2255,7 +2261,7 @@ index 19874a5..f8ec76e 100644
      REXGPU_ERROR("Failed to create the extreme-quality FXAA compute pipeline");
      return false;
    }
-@@ -1929,6 +1933,12 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
+@@ -1929,6 +1934,12 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
      return;
    }
    D3D12_RESOURCE_DESC swap_texture_desc = swap_texture_resource->GetDesc();
@@ -2268,7 +2274,7 @@ index 19874a5..f8ec76e 100644
    // The swap gamma / FXAA pass samples source texels by pixel index, but swap
    // textures may be allocation-padded. Prefer the active frontbuffer region
    // from the swap packet, scaled proportionally to the actual source texture.
-@@ -1984,6 +1994,13 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
+@@ -1984,6 +1995,13 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
    kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
    uint32_t display_width = std::max(uint32_t(1), uint32_t(video_mode.display_width));
    uint32_t display_height = std::max(uint32_t(1), uint32_t(video_mode.display_height));
@@ -2282,7 +2288,7 @@ index 19874a5..f8ec76e 100644
  
    presenter->RefreshGuestOutput(
        guest_output_width, guest_output_height, display_width, display_height,
-@@ -2409,6 +2426,49 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2409,6 +2427,49 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
        (pixel_shader != nullptr ? pixel_shader->GetUsedTextureMaskAfterTranslation() : 0);
    texture_cache_->RequestTextures(used_texture_mask);
  
@@ -2332,7 +2338,68 @@ index 19874a5..f8ec76e 100644
    // Bind the pipeline after configuring it and doing everything that may bind
    // other pipelines.
    if (current_guest_pipeline_ != pipeline_handle) {
-@@ -2524,6 +2584,10 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2495,11 +2556,55 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+           if (REXCVAR_GET(gpu_allow_invalid_fetch_constants)) {
+             break;
+           }
+-          REXGPU_WARN(
+-              "Vertex fetch constant {} ({:08X} {:08X}) has \"invalid\" type! "
+-              "This is incorrect behavior, but you can try bypassing this by "
+-              "launching Xenia with --gpu_allow_invalid_fetch_constants=true.",
+-              vfetch_index, vfetch_constant.dword_0, vfetch_constant.dword_1);
++          if (REXCVAR_GET(gpu_null_vertex_stream_draw) && vfetch_constant.address == 0) {
++            // Null stream: D3D's SetStreamSource(n, NULL) leaves type=kInvalidVertex at
++            // address 0. Xenos vfetch doesn't check the type, and uber-shaders often only
++            // fetch such a stream behind a runtime branch ('Splosion Man, Comic Jumper),
++            // so the draw must not be dropped. Same as the Vulkan backend: make the range
++            // the shader could read resident and read guest memory like hardware.
++            uint32_t stride_words = 0;
++            for (const auto& binding : vertex_shader->vertex_bindings()) {
++              if (binding.fetch_constant == vfetch_index) {
++                stride_words = std::max(stride_words, binding.stride_words);
++              }
++            }
++            uint32_t max_index =
++                std::min(uint32_t(regs.Get<reg::VGT_MAX_VTX_INDX>().max_indx) +
++                             uint32_t(regs.Get<reg::VGT_INDX_OFFSET>().indx_offset),
++                         uint32_t(0xFFFF));
++            uint32_t length = std::min((max_index + 1) * std::max(stride_words, 1u) * 4 + 64,
++                                       uint32_t(4) << 20);
++            if (!shared_memory_->RequestRange(0, length)) {
++              REXGPU_ERROR("Failed to request {} bytes at guest address 0 for a null vertex "
++                           "stream", length);
++              return false;
++            }
++            static std::atomic<uint64_t> null_stream_reports{0};
++            const uint64_t n = null_stream_reports.fetch_add(1, std::memory_order_relaxed);
++            if (n < 4 || (n & (n - 1)) == 0) {
++              REXGPU_INFO(
++                  "Vertex fetch constant {} is a null stream ({:08X} {:08X}); drawing with "
++                  "{} resident bytes at guest address 0 (stride {} words, occurrence {})",
++                  vfetch_index, vfetch_constant.dword_0, vfetch_constant.dword_1, length,
++                  stride_words, n + 1);
++            }
++            // Not marked in sync: the required length depends on per-draw registers.
++            continue;
++          }
++          {
++            // Some titles ('Splosion Man) issue draws with an unset fetch constant every
++            // frame; logging each dropped draw floods the log from the GPU thread.
++            static std::atomic<uint64_t> invalid_fetch_reports{0};
++            const uint64_t n = invalid_fetch_reports.fetch_add(1, std::memory_order_relaxed);
++            if (n < 16 || (n & (n - 1)) == 0) {
++              REXGPU_WARN(
++                  "Vertex fetch constant {} ({:08X} {:08X}) has \"invalid\" type! "
++                  "This is incorrect behavior, but you can try bypassing this by "
++                  "launching with --gpu_allow_invalid_fetch_constants=true. "
++                  "(occurrence {}, further ones are sampled)",
++                  vfetch_index, vfetch_constant.dword_0, vfetch_constant.dword_1, n + 1);
++            }
++          }
+           return false;
+         default:
+           REXGPU_WARN("Vertex fetch constant {} ({:08X} {:08X}) is completely invalid!",
+@@ -2524,6 +2629,10 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
      }
    }
  
@@ -2343,7 +2410,7 @@ index 19874a5..f8ec76e 100644
    // Gather memexport ranges and ensure the heaps for them are resident, and
    // also load the data surrounding the export and to fill the regions that
    // won't be modified by the shaders.
-@@ -2626,6 +2690,52 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2626,6 +2735,52 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
        shared_memory_->UseForReading();
      }
      SubmitBarriers();
@@ -2396,7 +2463,7 @@ index 19874a5..f8ec76e 100644
      PROFILE_DRAW_CALL();
      PROFILE_VERTICES(primitive_processing_result.host_draw_vertex_count);
      deferred_command_list_.D3DDrawInstanced(primitive_processing_result.host_draw_vertex_count, 1,
-@@ -2685,6 +2795,13 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+@@ -2685,6 +2840,13 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
        shared_memory_->UseForReading();
      }
      SubmitBarriers();
@@ -2410,7 +2477,7 @@ index 19874a5..f8ec76e 100644
      PROFILE_DRAW_CALL();
      PROFILE_VERTICES(primitive_processing_result.host_draw_vertex_count);
      deferred_command_list_.D3DDrawIndexedInstanced(
-@@ -3245,6 +3362,25 @@ void D3D12CommandProcessor::LogDeviceRemovalDiagnostics(ID3D12Device* device, HR
+@@ -3245,6 +3407,25 @@ void D3D12CommandProcessor::LogDeviceRemovalDiagnostics(ID3D12Device* device, HR
    if (SUCCEEDED(dred->GetPageFaultAllocationOutput(&page_fault)) && page_fault.PageFaultVA != 0) {
      REXGPU_ERROR("DRED page fault at VA 0x{:016X}", page_fault.PageFaultVA);
    }
@@ -2436,7 +2503,7 @@ index 19874a5..f8ec76e 100644
  }
  
  bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
-@@ -3830,6 +3966,12 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
+@@ -3830,6 +4011,12 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
      uint32_t texture_signs_mask = uint32_t(0b11111111) << texture_signs_shift;
      dirty |= (texture_signs_uint & texture_signs_mask) != texture_signs_shifted;
      texture_signs_uint = (texture_signs_uint & ~texture_signs_mask) | texture_signs_shifted;
@@ -2449,7 +2516,7 @@ index 19874a5..f8ec76e 100644
      textures_resolution_scaled |=
          uint32_t(texture_cache_->IsActiveTextureResolutionScaled(texture_index)) << texture_index;
    }
-@@ -3893,6 +4035,12 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
+@@ -3893,6 +4080,12 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
        system_constants_.edram_rt_keep_mask[i][0] = rt_keep_masks[i][0];
        dirty |= system_constants_.edram_rt_keep_mask[i][1] != rt_keep_masks[i][1];
        system_constants_.edram_rt_keep_mask[i][1] = rt_keep_masks[i][1];
@@ -2462,7 +2529,7 @@ index 19874a5..f8ec76e 100644
        if (rt_keep_masks[i][0] != UINT32_MAX || rt_keep_masks[i][1] != UINT32_MAX) {
          uint32_t rt_base_dwords_scaled = color_info.color_base * edram_tile_dwords_scaled;
          dirty |= system_constants_.edram_rt_base_dwords_scaled[i] != rt_base_dwords_scaled;
-@@ -4154,6 +4302,25 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+@@ -4154,6 +4347,25 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
      }
      cbuffer_binding_float_pixel_.up_to_date = true;
      current_graphics_root_up_to_date_ &= ~(1u << root_parameter_float_constants_pixel);
@@ -2488,7 +2555,7 @@ index 19874a5..f8ec76e 100644
    }
    if (!cbuffer_binding_bool_loop_.up_to_date) {
      constexpr uint32_t kBoolLoopConstantsSize = (8 + 32) * sizeof(uint32_t);
-@@ -4349,9 +4516,9 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+@@ -4349,9 +4561,9 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
                  break;
                }
                sampler_index = sampler_bindless_heap_allocated_++;
@@ -2501,7 +2568,7 @@ index 19874a5..f8ec76e 100644
                texture_cache_bindless_sampler_map_.emplace(sampler_parameters.value, sampler_index);
              }
              current_sampler_bindless_indices_vertex_[j] = sampler_index;
-@@ -4375,9 +4542,9 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+@@ -4375,9 +4587,9 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
                  break;
                }
                sampler_index = sampler_bindless_heap_allocated_++;
@@ -2514,7 +2581,7 @@ index 19874a5..f8ec76e 100644
                texture_cache_bindless_sampler_map_.emplace(sampler_parameters.value, sampler_index);
              }
              current_sampler_bindless_indices_pixel_[j] = sampler_index;
-@@ -4589,6 +4756,11 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+@@ -4589,6 +4801,11 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
                    RootBindfulExtraParameterIndices::kUnavailable);
        gpu_handle_textures_pixel_ = view_gpu_handle;
        for (size_t i = 0; i < texture_count_pixel; ++i) {
@@ -2526,7 +2593,7 @@ index 19874a5..f8ec76e 100644
          texture_cache_->WriteActiveTextureBindfulSRV((*textures_pixel)[i], view_cpu_handle);
          view_cpu_handle.ptr += descriptor_size_view;
          view_gpu_handle.ptr += descriptor_size_view;
-@@ -4607,7 +4779,8 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+@@ -4607,7 +4824,8 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
                    RootBindfulExtraParameterIndices::kUnavailable);
        gpu_handle_samplers_vertex_ = sampler_gpu_handle;
        for (size_t i = 0; i < sampler_count_vertex; ++i) {
@@ -2536,7 +2603,7 @@ index 19874a5..f8ec76e 100644
          sampler_cpu_handle.ptr += descriptor_size_sampler;
          sampler_gpu_handle.ptr += descriptor_size_sampler;
        }
-@@ -4621,7 +4794,8 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
+@@ -4621,7 +4839,8 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
                    RootBindfulExtraParameterIndices::kUnavailable);
        gpu_handle_samplers_pixel_ = sampler_gpu_handle;
        for (size_t i = 0; i < sampler_count_pixel; ++i) {
