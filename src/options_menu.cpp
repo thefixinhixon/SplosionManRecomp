@@ -274,8 +274,10 @@ std::string FormatFileTime(uint64_t filetime) {
 #else
   if (!localtime_r(&t, &tm)) return {};
 #endif
-  char buf[32];
-  return std::strftime(buf, sizeof(buf), "%b %e, %Y", &tm) ? std::string(buf) : std::string();
+  char month[16];
+  if (!std::strftime(month, sizeof(month), "%b", &tm)) return {};
+  return std::string(month) + " " + std::to_string(tm.tm_mday) + ", " +
+         std::to_string(tm.tm_year + 1900);
 }
 
 void TextCentered(const char* text, const ImVec4& color) {
@@ -603,7 +605,15 @@ void OptionsMenu::OnDraw(ImGuiIO& io) {
     rows = VisibleRows(cur_page);
     row_ = std::clamp(row_, 0, std::max(0, int(rows.size()) - 1));
     const float help_h = fs * 6.6f;
-    const float footer_h = fs * 2.2f;
+    // Footer: the status text and the button hints share a line when the longest of each
+    // fits (wide windows); otherwise the hints get their own line.
+    const char* hint = cur_page.achievements ? "LB/RB page   D-pad scroll   B close"
+                                             : "LB/RB page   D-pad change   Y reset   B close";
+    const bool footer_wrap =
+        ImGui::CalcTextSize("Restart the game to apply the settings marked *").x +
+            ImGui::CalcTextSize("LB/RB page   D-pad change   Y reset   B close").x + fs * 1.5f >
+        ImGui::GetContentRegionAvail().x;
+    const float footer_h = footer_wrap ? fs * 3.5f : fs * 2.2f;
     ImGui::BeginChild("##rows", ImVec2(0, ImGui::GetContentRegionAvail().y - help_h - footer_h),
                       ImGuiChildFlags_None, ImGuiWindowFlags_NoNav);
     const float value_col = ImGui::GetContentRegionAvail().x * 0.58f;
@@ -777,9 +787,12 @@ void OptionsMenu::OnDraw(ImGuiIO& io) {
     } else {
       ImGui::TextColored(kTextDim, "Changes apply immediately and are saved");
     }
-    const char* hint = cur_page.achievements ? "LB/RB page   D-pad scroll   B close"
-                                             : "LB/RB page   D-pad change   Y reset   B close";
-    ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize(hint).x - fs * 1.2f);
+    const float hint_x = ImGui::GetWindowWidth() - ImGui::CalcTextSize(hint).x - fs * 1.2f;
+    if (footer_wrap) {
+      ImGui::SetCursorPosX(hint_x);
+    } else {
+      ImGui::SameLine(hint_x);
+    }
     ImGui::TextColored(kTextDim, "%s", hint);
   }
   ImGui::End();
