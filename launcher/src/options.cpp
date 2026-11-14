@@ -206,6 +206,11 @@ QList<Option> buildOptions()
                    QStringLiteral("Play with the keyboard: WASD move, Space or ; jump ('splode), "
                                   "Enter start, Tab back. Works alongside a controller."),
                    onOff(QStringLiteral("mnk_mode")), QStringLiteral("off"), {}, {}};
+    list << Option{QStringLiteral("dpad_movement"), controls, QStringLiteral("D-pad moves"),
+                   QStringLiteral("Move with the D-pad as well as the left stick. The original "
+                                  "game ignores the D-pad while you play. The stick wins if you "
+                                  "use both."),
+                   onOff(QStringLiteral("dpad_movement")), QStringLiteral("on"), {}, {}};
     list << Option{QStringLiteral("mouse_cursor"), controls, QStringLiteral("Mouse cursor"),
                    QStringLiteral("Hide when idle: the cursor appears when you move the mouse and "
                                   "hides again after 2 seconds. Always hide: never shown over the "

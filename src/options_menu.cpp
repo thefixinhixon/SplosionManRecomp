@@ -239,6 +239,10 @@ std::vector<OptionsMenu::Page> BuildPages() {
                        "Play with the keyboard: WASD move, Space / ; jump ('splode), Enter "
                        "start, Tab back. Works alongside a controller.",
                        OnOff("mnk_mode")});
+    p.items.push_back({"D-pad moves",
+                       "Move with the D-pad as well as the left stick. The original game "
+                       "ignores the D-pad while you play. The stick wins if you use both.",
+                       OnOff("dpad_movement")});
     p.items.push_back({"Mouse cursor",
                        "Hide when idle: the cursor appears when you move the mouse and hides "
                        "again after 2 seconds.\nAlways hide: never shown over the game, except "

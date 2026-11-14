@@ -35,6 +35,9 @@ REXCVAR_DEFINE_INT32(mouse_cursor, 1, "Recomp",
                      "Mouse cursor over the game window: 0 = always shown, 1 = hidden until the "
                      "mouse moves, 2 = always hidden (shown while the options menu is open)")
     .range(0, 2);
+REXCVAR_DEFINE_BOOL(dpad_movement, true, "Recomp",
+                    "The D-pad moves like the left stick (the game itself ignores the D-pad "
+                    "in play); the stick wins when both are used");
 
 
 namespace {
@@ -52,7 +55,7 @@ const std::vector<std::string> kManagedCvars = {
     "audio_output_gain",    "audio_mute",
     "audio_force_stereo",   "vibration_strength",
     "mnk_mode",             "show_menu_hint",
-    "mouse_cursor",
+    "mouse_cursor",         "dpad_movement",
 };
 
 constexpr uint32_t kCursorIdleMs = 2000;  // mouse_cursor 1: hide after this long without motion
@@ -222,6 +225,26 @@ void SplosionmanApp::InstallInputFilters() {
         app_context().CallInUIThread([this]() { ToggleMenu(); });
       } else if (!chord) {
         chord_down_[user] = false;
+      }
+    }
+    if (REXCVAR_GET(dpad_movement)) {
+      // Full deflection on each axis the D-pad presses, unless the stick is already in use on
+      // that axis (outside the standard XInput dead zone). The converted D-pad bits are
+      // cleared: the game's menus read both the D-pad and the stick, so keeping both would
+      // move two steps per press.
+      using namespace rex::input;
+      constexpr int kDeadZone = 7849;
+      const int dx = ((buttons & X_INPUT_GAMEPAD_DPAD_RIGHT) ? 1 : 0) -
+                     ((buttons & X_INPUT_GAMEPAD_DPAD_LEFT) ? 1 : 0);
+      const int dy = ((buttons & X_INPUT_GAMEPAD_DPAD_UP) ? 1 : 0) -
+                     ((buttons & X_INPUT_GAMEPAD_DPAD_DOWN) ? 1 : 0);
+      if (dx && std::abs(int(st.gamepad.thumb_lx)) < kDeadZone) {
+        st.gamepad.thumb_lx = int16_t(dx * 32767);
+        st.gamepad.buttons = uint16_t(uint16_t(st.gamepad.buttons) & ~(X_INPUT_GAMEPAD_DPAD_LEFT | X_INPUT_GAMEPAD_DPAD_RIGHT));
+      }
+      if (dy && std::abs(int(st.gamepad.thumb_ly)) < kDeadZone) {
+        st.gamepad.thumb_ly = int16_t(dy * 32767);
+        st.gamepad.buttons = uint16_t(uint16_t(st.gamepad.buttons) & ~(X_INPUT_GAMEPAD_DPAD_UP | X_INPUT_GAMEPAD_DPAD_DOWN));
       }
     }
     if (suppress_until_release_.load() && !menu_open_.load()) {
