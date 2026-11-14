@@ -87,6 +87,11 @@
   </content_rating>
 
   <releases>
+    <release version="2.3.3" date="2026-11-14">
+      <description>
+        <p>An Achievements page in the in-game menu (F1) lists every achievement with its icon and unlock date, and the mouse cursor now hides when you're not moving it (new Mouse cursor option).</p>
+      </description>
+    </release>
     <release version="2.3.2" date="2026-11-13">
       <description>
         <p>Fixes the DLC world in Time Trial: its tile no longer shows "BUFFER" text, and it opens the DLC levels.</p>
