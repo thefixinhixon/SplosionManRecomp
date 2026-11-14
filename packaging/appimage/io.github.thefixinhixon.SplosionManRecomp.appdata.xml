@@ -87,6 +87,11 @@
   </content_rating>
 
   <releases>
+    <release version="2.3.5" date="2026-11-14">
+      <description>
+        <p>Windows: a few draws the game makes with an empty vertex stream are now drawn instead of dropped, as on Linux, and the game log no longer fills with warnings about them.</p>
+      </description>
+    </release>
     <release version="2.3.4" date="2026-11-14">
       <description>
         <p>You can move with the D-pad as well as the left stick (new D-pad moves option, on by default).</p>
