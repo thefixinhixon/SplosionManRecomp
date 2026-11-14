@@ -87,6 +87,11 @@
   </content_rating>
 
   <releases>
+    <release version="2.3.2" date="2026-11-13">
+      <description>
+        <p>Fixes the DLC world in Time Trial: its tile no longer shows "BUFFER" text, and it opens the DLC levels.</p>
+      </description>
+    </release>
     <release version="2.3.1" date="2026-11-12">
       <description>
         <p>DLC support: the launcher can import the Prologue to Ms. 'Splosion Man package, and the game now reads it instead of reporting it unreadable.</p>
