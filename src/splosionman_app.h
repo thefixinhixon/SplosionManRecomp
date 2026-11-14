@@ -45,6 +45,7 @@ class SplosionmanApp : public rex::ReXApp {
   void CloseMenu();
   void QuitGame();
   void SyncPerfOverlay();
+  void ApplyCursor();
   void ApplyLive(const std::string& cvar);
   void InstallInputFilters();
   std::vector<splosion::AchievementRow> ListAchievements();

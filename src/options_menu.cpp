@@ -239,6 +239,13 @@ std::vector<OptionsMenu::Page> BuildPages() {
                        "Play with the keyboard: WASD move, Space / ; jump ('splode), Enter "
                        "start, Tab back. Works alongside a controller.",
                        OnOff("mnk_mode")});
+    p.items.push_back({"Mouse cursor",
+                       "Hide when idle: the cursor appears when you move the mouse and hides "
+                       "again after 2 seconds.\nAlways hide: never shown over the game, except "
+                       "while this menu is open.\nAlways show: the cursor stays visible.",
+                       {C("Always show", {{"mouse_cursor", "0"}}),
+                        C("Hide when idle", {{"mouse_cursor", "1"}}),
+                        C("Always hide", {{"mouse_cursor", "2"}})}});
     Item hint;
     hint.label = "Open this menu: F1, or click both sticks (L3 + R3)";
     hint.info_only = true;

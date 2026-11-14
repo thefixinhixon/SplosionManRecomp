@@ -31,6 +31,10 @@ REXCVAR_DEFINE_INT32(vibration_strength, 100, "Recomp", "Controller vibration st
     .range(0, 100);
 REXCVAR_DEFINE_BOOL(show_menu_hint, true, "Recomp",
                     "Show the 'press F1 / L3+R3 for options' hint at startup");
+REXCVAR_DEFINE_INT32(mouse_cursor, 1, "Recomp",
+                     "Mouse cursor over the game window: 0 = always shown, 1 = hidden until the "
+                     "mouse moves, 2 = always hidden (shown while the options menu is open)")
+    .range(0, 2);
 
 
 namespace {
@@ -48,7 +52,10 @@ const std::vector<std::string> kManagedCvars = {
     "audio_output_gain",    "audio_mute",
     "audio_force_stereo",   "vibration_strength",
     "mnk_mode",             "show_menu_hint",
+    "mouse_cursor",
 };
+
+constexpr uint32_t kCursorIdleMs = 2000;  // mouse_cursor 1: hide after this long without motion
 
 constexpr uint16_t kChord =
     rex::input::X_INPUT_GAMEPAD_LEFT_THUMB | rex::input::X_INPUT_GAMEPAD_RIGHT_THUMB;
@@ -186,6 +193,7 @@ void SplosionmanApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
   rex::ui::RegisterBind("bind_recomp_options", "F1", "Toggle the recomp options menu",
                         [this] { ToggleMenu(); });
   SyncPerfOverlay();
+  ApplyCursor();
   if (REXCVAR_GET(show_menu_hint)) {
     hint_ = std::make_unique<splosion::HintToast>(imgui_drawer(), MakeHost(), [this]() {
       app_context().CallInUIThreadDeferred([this]() { hint_.reset(); });
@@ -266,6 +274,7 @@ void SplosionmanApp::OpenMenu() {
     runtime()->graphics_system()->SetGuestFrameHold(true);
     frame_held_ = true;
   }
+  ApplyCursor();
 }
 
 void SplosionmanApp::CloseMenu() {
@@ -279,7 +288,26 @@ void SplosionmanApp::CloseMenu() {
     runtime()->graphics_system()->SetGuestFrameHold(false);
   }
   frame_held_ = false;
+  ApplyCursor();
   store_.SaveIfDirty();
+}
+
+// Same SDL window code on Linux and Windows: SDL hides the cursor only while
+// it is over the game window.
+void SplosionmanApp::ApplyCursor() {
+  auto* w = window();
+  if (!w) {
+    return;
+  }
+  int mode = REXCVAR_GET(mouse_cursor);
+  if (mode == 2 && menu_) {
+    mode = 1;  // the menu can be used with the mouse
+  }
+  using Visibility = rex::ui::Window::CursorVisibility;
+  w->SetCursorAutoHideDelayMs(kCursorIdleMs);
+  w->SetCursorVisibility(mode == 0   ? Visibility::kVisible
+                         : mode == 1 ? Visibility::kAutoHidden
+                                     : Visibility::kHidden);
 }
 
 void SplosionmanApp::QuitGame() {
@@ -330,6 +358,9 @@ void SplosionmanApp::ApplyLive(const std::string& cvar) {
         window()->SetFullscreen(fs);
       }
     });
+  }
+  if (all || cvar == "mouse_cursor") {
+    ApplyCursor();
   }
   if (all || cvar == "audio_output_gain") {
     rex::audio::SetOutputGain(float(rex::cvar::Query<double>("audio_output_gain")));

@@ -206,6 +206,17 @@ QList<Option> buildOptions()
                    QStringLiteral("Play with the keyboard: WASD move, Space or ; jump ('splode), "
                                   "Enter start, Tab back. Works alongside a controller."),
                    onOff(QStringLiteral("mnk_mode")), QStringLiteral("off"), {}, {}};
+    list << Option{QStringLiteral("mouse_cursor"), controls, QStringLiteral("Mouse cursor"),
+                   QStringLiteral("Hide when idle: the cursor appears when you move the mouse and "
+                                  "hides again after 2 seconds. Always hide: never shown over the "
+                                  "game, except while the in-game menu is open."),
+                   {c(QStringLiteral("show"), QStringLiteral("Always show"),
+                      {{QStringLiteral("mouse_cursor"), QStringLiteral("0")}}),
+                    c(QStringLiteral("idle"), QStringLiteral("Hide when idle"),
+                      {{QStringLiteral("mouse_cursor"), QStringLiteral("1")}}),
+                    c(QStringLiteral("hide"), QStringLiteral("Always hide"),
+                      {{QStringLiteral("mouse_cursor"), QStringLiteral("2")}})},
+                   QStringLiteral("idle"), {}, {}};
     list << Option{QStringLiteral("menu_hint"), controls,
                    QStringLiteral("Show the in-game menu hint"),
                    QStringLiteral("Shows \"F1 or L3 + R3: options\" for a few seconds when the "
