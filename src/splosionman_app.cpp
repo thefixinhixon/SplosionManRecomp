@@ -13,7 +13,10 @@
 #include <rex/input/input.h>
 #include <rex/input/input_system.h>
 #include <rex/logging.h>
+#include <rex/system/achievement_manager.h>
 #include <rex/system/interfaces/graphics.h>
+#include <rex/system/kernel_state.h>
+#include <rex/ui/overlay/achievement_icon_cache.h>
 #include <rex/ui/keybinds.h>
 #include <rex/ui/presenter.h>
 #include <rex/ui/window.h>
@@ -147,7 +150,35 @@ splosion::MenuHost SplosionmanApp::MakeHost() {
   host.request_close = [this]() {
     app_context().CallInUIThreadDeferred([this]() { CloseMenu(); });
   };
+  host.achievements = [this]() { return ListAchievements(); };
   return host;
+}
+
+// The game's achievements (from its XEX) with their unlock state. UI thread.
+std::vector<splosion::AchievementRow> SplosionmanApp::ListAchievements() {
+  std::vector<splosion::AchievementRow> rows;
+  if (!runtime() || !runtime()->kernel_state()) {
+    return rows;
+  }
+  if (!icon_cache_ && immediate_drawer()) {
+    icon_cache_ = std::make_unique<rex::ui::AchievementIconCache>(immediate_drawer(), runtime());
+  }
+  const auto& manager = achievements();
+  for (const auto& info : manager.ListAchievements()) {
+    splosion::AchievementRow row;
+    row.name = info.label;
+    row.gamerscore = info.gamerscore;
+    row.unlocked = manager.IsUnlocked(info.id);
+    row.unlocked_at = row.unlocked ? manager.GetUnlockTime(info.id) : 0;
+    // XDBF flag 0x8: the achievement is shown before it is unlocked; without it, it's secret.
+    row.secret = (info.flags & 0x8) == 0;
+    row.description = row.unlocked || info.unachieved_description.empty()
+                          ? info.description
+                          : info.unachieved_description;
+    row.icon = icon_cache_ ? icon_cache_->GetIcon(info) : nullptr;
+    rows.push_back(std::move(row));
+  }
+  return rows;
 }
 
 void SplosionmanApp::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
@@ -320,5 +351,6 @@ void SplosionmanApp::OnShutdown() {
   menu_.reset();
   perf_overlay_.reset();
   hint_.reset();
+  icon_cache_.reset();
   store_.SaveIfDirty();
 }

@@ -9,9 +9,11 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <rex/cvar.h>
 #include <rex/rex_app.h>
+#include <rex/ui/overlay/achievement_icon_cache.h>
 
 #include "options_menu.h"
 #include "recomp_options.h"
@@ -45,12 +47,14 @@ class SplosionmanApp : public rex::ReXApp {
   void SyncPerfOverlay();
   void ApplyLive(const std::string& cvar);
   void InstallInputFilters();
+  std::vector<splosion::AchievementRow> ListAchievements();
 
   splosion::OptionsStore store_;
   std::array<ImFont*, 4> fonts_{};
   std::unique_ptr<splosion::OptionsMenu> menu_;
   std::unique_ptr<splosion::PerfOverlay> perf_overlay_;
   std::unique_ptr<splosion::HintToast> hint_;
+  std::unique_ptr<rex::ui::AchievementIconCache> icon_cache_;  // textures, UI thread only
   std::atomic<bool> menu_open_{false};
   // After the menu closes, keep the pad neutral for the game until every
   // button is released, so the B that closed it doesn't reach the game.

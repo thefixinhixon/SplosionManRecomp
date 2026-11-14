@@ -3,7 +3,8 @@
 // Open with F1 on the keyboard or by clicking both sticks (L3 + R3) on a
 // controller. Navigation: D-pad / left stick or arrow keys to move, Left /
 // Right to change a value, LB / RB (Q / E, Tab) to switch pages, B / Esc to
-// close, Y (R) twice to reset everything. The Game page has Resume and Quit.
+// close, Y (R) twice to reset everything. The Game page has Resume and Quit;
+// the Achievements page lists the game's achievements and which are unlocked.
 
 #pragma once
 
@@ -22,6 +23,17 @@ namespace splosion {
 
 class OptionsStore;
 
+// One achievement as the menu shows it.
+struct AchievementRow {
+  std::string name;
+  std::string description;  // how to earn it (or what it was for, once unlocked)
+  uint32_t gamerscore = 0;
+  bool unlocked = false;
+  bool secret = false;           // hidden until unlocked
+  uint64_t unlocked_at = 0;      // Windows FILETIME, 0 = unknown
+  void* icon = nullptr;          // ImTextureID, null = no icon
+};
+
 // What the menu needs from the app. All callbacks run on the UI thread.
 struct MenuHost {
   OptionsStore* store = nullptr;
@@ -31,6 +43,7 @@ struct MenuHost {
   std::function<void(const std::string& cvar)> on_changed;  // live-apply hook
   std::function<void()> request_close;      // closes the menu after the current frame
   std::function<void()> request_quit;       // saves options and exits the game
+  std::function<std::vector<AchievementRow>()> achievements;  // in the game's order
 };
 
 ImFont* PickFont(const std::array<ImFont*, 4>& fonts, float display_height, int bias = 0);
@@ -57,6 +70,7 @@ class OptionsMenu : public rex::ui::ImGuiDialog {
   struct Page {
     std::string name;
     std::vector<Item> items;
+    bool achievements = false;  // rows come from MenuHost::achievements
   };
 
  protected:
@@ -69,9 +83,11 @@ class OptionsMenu : public rex::ui::ImGuiDialog {
   void Step(Item& item, int dir);
   void Activate(Item& item);
   std::vector<int> VisibleRows(const Page& page) const;
+  void RefreshAchievements(Page& page);
 
   MenuHost host_;
   std::vector<Page> pages_;
+  std::vector<AchievementRow> achievements_;  // rows of the Achievements page
   int page_ = 0;
   int row_ = 0;
   uint16_t prev_buttons_ = 0;

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 
 #include <imgui.h>
 
@@ -88,6 +89,9 @@ std::vector<OptionsMenu::Page> BuildPages() {
     p.items.push_back(quit);
     pages.push_back(std::move(p));
   }
+
+  // --- Achievements (rows filled from the game's list each frame) ---------------------------
+  pages.push_back(OptionsMenu::Page{"Achievements", {}, true});
 
   // --- Performance -------------------------------------------------------------------------
   {
@@ -251,6 +255,22 @@ std::vector<OptionsMenu::Page> BuildPages() {
   return pages;
 }
 
+// "Oct 5, 2026" from a Windows FILETIME (100 ns ticks since 1601), in local time.
+std::string FormatFileTime(uint64_t filetime) {
+  if (filetime == 0) {
+    return {};
+  }
+  const std::time_t t = static_cast<std::time_t>(filetime / 10000000ull) - 11644473600ll;
+  std::tm tm{};
+#ifdef _WIN32
+  if (localtime_s(&tm, &t) != 0) return {};
+#else
+  if (!localtime_r(&t, &tm)) return {};
+#endif
+  char buf[32];
+  return std::strftime(buf, sizeof(buf), "%b %e, %Y", &tm) ? std::string(buf) : std::string();
+}
+
 void TextCentered(const char* text, const ImVec4& color) {
   float w = ImGui::CalcTextSize(text).x;
   ImGui::SetCursorPosX(std::max(0.0f, (ImGui::GetWindowWidth() - w) * 0.5f));
@@ -290,6 +310,18 @@ std::vector<int> OptionsMenu::VisibleRows(const Page& page) const {
     }
   }
   return rows;
+}
+
+void OptionsMenu::RefreshAchievements(Page& page) {
+  achievements_ = host_.achievements ? host_.achievements() : std::vector<AchievementRow>{};
+  page.items.clear();
+  for (const AchievementRow& a : achievements_) {
+    Item item;
+    item.label = a.name;
+    item.help = a.description;
+    item.info_only = true;
+    page.items.push_back(std::move(item));
+  }
 }
 
 int OptionsMenu::CurrentChoice(const Item& item) const {
@@ -421,6 +453,7 @@ OptionsMenu::Action OptionsMenu::ReadAction(ImGuiIO& io) {
 
 void OptionsMenu::OnDraw(ImGuiIO& io) {
   auto now = Clock::now();
+  if (pages_[page_].achievements) RefreshAchievements(pages_[page_]);
   Page& page = pages_[page_];
   auto rows = VisibleRows(page);
   row_ = std::clamp(row_, 0, std::max(0, int(rows.size()) - 1));
@@ -559,6 +592,7 @@ void OptionsMenu::OnDraw(ImGuiIO& io) {
 
     // Rows (re-read: a tab click may have changed the page).
     Page& cur_page = pages_[page_];
+    if (cur_page.achievements && &cur_page != &page) RefreshAchievements(cur_page);
     rows = VisibleRows(cur_page);
     row_ = std::clamp(row_, 0, std::max(0, int(rows.size()) - 1));
     const float help_h = fs * 6.6f;
@@ -566,7 +600,70 @@ void OptionsMenu::OnDraw(ImGuiIO& io) {
     ImGui::BeginChild("##rows", ImVec2(0, ImGui::GetContentRegionAvail().y - help_h - footer_h),
                       ImGuiChildFlags_None, ImGuiWindowFlags_NoNav);
     const float value_col = ImGui::GetContentRegionAvail().x * 0.58f;
-    for (int r = 0; r < int(rows.size()); ++r) {
+    if (cur_page.achievements && achievements_.empty()) {
+      ImGui::Dummy(ImVec2(0, fs * 0.5f));
+      TextCentered("This game's achievement list isn't available.", kTextDim);
+    }
+    for (int r = 0; cur_page.achievements && r < int(rows.size()); ++r) {
+      const AchievementRow& a = achievements_[rows[r]];
+      ImGui::PushID(r);
+      const bool sel = r == row_;
+      const float row_h = fs * 2.5f;
+      const ImVec2 row_pos = ImGui::GetCursorScreenPos();
+      if (ImGui::Selectable("##ach", sel, 0, ImVec2(0, row_h))) {
+        row_ = r;
+      }
+      if (ImGui::IsItemHovered() && mouse_active &&
+          (ImGui::GetIO().MouseDelta.x != 0.0f || ImGui::GetIO().MouseDelta.y != 0.0f)) {
+        row_ = r;
+      }
+      if (sel && !ImGui::IsWindowAppearing()) {
+        ImGui::SetScrollHereY(0.5f);
+      }
+      ImDrawList* dl = ImGui::GetWindowDrawList();
+      if (sel) {
+        dl->AddRectFilled(row_pos, ImVec2(row_pos.x + 4.0f, row_pos.y + row_h),
+                          ImGui::GetColorU32(kAccent));
+      }
+      // Icon: full color when unlocked, faded when locked.
+      const float icon = fs * 2.0f;
+      const ImVec2 icon_min(row_pos.x + fs * 0.6f, row_pos.y + (row_h - icon) * 0.5f);
+      const ImVec2 icon_max(icon_min.x + icon, icon_min.y + icon);
+      if (a.icon && (a.unlocked || !a.secret)) {
+        dl->AddImage(reinterpret_cast<ImTextureID>(a.icon), icon_min, icon_max, ImVec2(0, 0),
+                     ImVec2(1, 1), a.unlocked ? IM_COL32_WHITE : IM_COL32(255, 255, 255, 70));
+      } else {
+        dl->AddRectFilled(icon_min, icon_max, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.06f)),
+                          fs * 0.2f);
+        const char* q = "?";
+        const ImVec2 qs = ImGui::CalcTextSize(q);
+        dl->AddText(ImVec2(icon_min.x + (icon - qs.x) * 0.5f, icon_min.y + (icon - qs.y) * 0.5f),
+                    ImGui::GetColorU32(kTextDim), q);
+      }
+      // Name, and when it was unlocked.
+      const float text_x = icon_max.x + fs * 0.7f;
+      const float top = row_pos.y + row_h * 0.5f - fs * 1.05f;
+      const bool hidden = a.secret && !a.unlocked;
+      dl->AddText(ImVec2(text_x, top), ImGui::GetColorU32(a.unlocked ? kText : kTextDim),
+                  hidden ? "Secret achievement" : a.name.c_str());
+      std::string status = "Locked";
+      if (a.unlocked) {
+        const std::string when = FormatFileTime(a.unlocked_at);
+        status = when.empty() ? "Unlocked" : "Unlocked " + when;
+      }
+      dl->AddText(ImVec2(text_x, top + fs * 1.1f),
+                  ImGui::GetColorU32(a.unlocked ? kGood : ImVec4(0.45f, 0.47f, 0.52f, 1.0f)),
+                  status.c_str());
+      // Gamerscore on the right.
+      char score[16];
+      std::snprintf(score, sizeof(score), "%uG", a.gamerscore);
+      const ImVec2 ss = ImGui::CalcTextSize(score);
+      dl->AddText(ImVec2(row_pos.x + ImGui::GetContentRegionAvail().x - ss.x - fs * 0.5f,
+                         row_pos.y + (row_h - ss.y) * 0.5f),
+                  ImGui::GetColorU32(a.unlocked ? kAccent : kTextDim), score);
+      ImGui::PopID();
+    }
+    for (int r = 0; !cur_page.achievements && r < int(rows.size()); ++r) {
       Item& item = cur_page.items[rows[r]];
       ImGui::PushID(r);
       const bool sel = r == row_;
@@ -636,8 +733,11 @@ void OptionsMenu::OnDraw(ImGuiIO& io) {
                       ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollbar);
     if (!rows.empty()) {
       const Item& item = cur_page.items[rows[row_]];
+      const bool hidden = cur_page.achievements && achievements_[rows[row_]].secret &&
+                          !achievements_[rows[row_]].unlocked;
       ImGui::PushStyleColor(ImGuiCol_Text, kTextDim);
-      ImGui::TextWrapped("%s", item.help.c_str());
+      ImGui::TextWrapped("%s", hidden ? "Keep playing to unlock this secret achievement."
+                                      : item.help.c_str());
       ImGui::PopStyleColor();
       if (item.restart) {
         ImGui::TextColored(kWarn, "* Takes effect after restarting the game.");
@@ -653,12 +753,25 @@ void OptionsMenu::OnDraw(ImGuiIO& io) {
       ImGui::TextColored(kWarn, "Press A / Enter again to quit the game");
     } else if (reset_presses_) {
       ImGui::TextColored(kWarn, "Press Y / R again to reset every option");
+    } else if (cur_page.achievements) {
+      int got = 0;
+      uint32_t score = 0, total = 0;
+      for (const AchievementRow& a : achievements_) {
+        total += a.gamerscore;
+        if (a.unlocked) {
+          ++got;
+          score += a.gamerscore;
+        }
+      }
+      ImGui::TextColored(kTextDim, "%d of %d unlocked   %u of %uG", got, int(achievements_.size()),
+                         score, total);
     } else if (host_.store->HasPendingRestart()) {
       ImGui::TextColored(kWarn, "Restart the game to apply the settings marked *");
     } else {
       ImGui::TextColored(kTextDim, "Changes apply immediately and are saved");
     }
-    const char* hint = "LB/RB page   D-pad change   Y reset   B close";
+    const char* hint = cur_page.achievements ? "LB/RB page   D-pad scroll   B close"
+                                             : "LB/RB page   D-pad change   Y reset   B close";
     ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize(hint).x - fs * 1.2f);
     ImGui::TextColored(kTextDim, "%s", hint);
   }
