@@ -87,6 +87,11 @@
   </content_rating>
 
   <releases>
+    <release version="2.3.4" date="2026-11-14">
+      <description>
+        <p>You can move with the D-pad as well as the left stick (new D-pad moves option, on by default).</p>
+      </description>
+    </release>
     <release version="2.3.3" date="2026-11-14">
       <description>
         <p>An Achievements page in the in-game menu (F1) lists every achievement with its icon and unlock date, and the mouse cursor now hides when you're not moving it (new Mouse cursor option).</p>
